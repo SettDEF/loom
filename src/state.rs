@@ -5,7 +5,7 @@ use std::{os::unix::io::OwnedFd, sync::Arc, time::Instant};
 
 use smithay::{
     delegate_compositor, delegate_data_device, delegate_output, delegate_seat, delegate_shm, delegate_xdg_shell,
-    desktop::{Space, Window},
+    desktop::{PopupKind, PopupManager, Space, Window},
     input::{Seat, SeatHandler, SeatState},
     output::Output,
     reexports::{
@@ -47,6 +47,8 @@ pub struct Loom {
     pub seat: Seat<Loom>,
     /// the windows and where they are
     pub space: Space<Window>,
+    /// menus and other popups, with the window they belong to
+    pub popups: PopupManager,
     /// the one output while there is one (headless, nested)
     pub output: Option<Output>,
 }
@@ -66,6 +68,7 @@ impl Loom {
             seat_state,
             seat,
             space: Space::default(),
+            popups: PopupManager::default(),
             output: None,
             start: Instant::now(),
             signal,
@@ -132,6 +135,13 @@ impl CompositorHandler for Loom {
     }
     fn commit(&mut self, surface: &WlSurface) {
         on_commit_buffer_handler::<Self>(surface);
+        self.popups.commit(surface);
+        // a popup's first commit: its place (from its positioner)
+        if let Some(PopupKind::Xdg(p)) = self.popups.find_popup(surface) {
+            if !p.is_initial_configure_sent() {
+                let _ = p.send_configure();
+            }
+        }
         if is_sync_subsurface(surface) {
             return;
         }
@@ -170,9 +180,18 @@ impl XdgShellHandler for Loom {
         }
         self.relayout();
     }
-    fn new_popup(&mut self, _surface: PopupSurface, _positioner: PositionerState) {}
+    fn new_popup(&mut self, surface: PopupSurface, positioner: PositionerState) {
+        surface.with_pending_state(|s| s.geometry = positioner.get_geometry());
+        let _ = self.popups.track_popup(PopupKind::Xdg(surface));
+    }
     fn grab(&mut self, _surface: PopupSurface, _seat: wl_seat::WlSeat, _serial: Serial) {}
-    fn reposition_request(&mut self, _surface: PopupSurface, _positioner: PositionerState, _token: u32) {}
+    fn reposition_request(&mut self, surface: PopupSurface, positioner: PositionerState, token: u32) {
+        surface.with_pending_state(|s| {
+            s.geometry = positioner.get_geometry();
+            s.positioner = positioner;
+        });
+        surface.send_repositioned(token);
+    }
 }
 
 impl BufferHandler for Loom {

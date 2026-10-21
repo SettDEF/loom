@@ -84,6 +84,7 @@ pub fn run(opts: Options) -> Result<(), Box<dyn std::error::Error>> {
             w.send_frame(&output, Duration::from_millis(now as u64), Some(Duration::ZERO), |_, _| Some(output.clone()));
         }
         state.space.refresh();
+        state.popups.cleanup();
         let _ = state.dh.flush_clients();
         if let (Some(path), true) = (&opts.snapshot, state.start.elapsed() >= opts.wait) {
             match save_png(&image, path) {

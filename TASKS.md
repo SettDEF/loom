@@ -9,7 +9,7 @@ The milestones of [PLAN.md](PLAN.md), each step a line; ticked when it works wit
 - [x] wl_compositor, wl_subcompositor, wl_shm, xdg-shell, wl_seat, data device, wl_output, xdg-output (wayland-info lists them)
 - [x] keyboard and pointer input in the headless backend (scripted: `--keys`, `--click`), focus follows clicks
 - [x] several windows (two alacritty side by side in one picture)
-- [ ] popups (xdg_popup: alacritty's / zash's menus)
+- [x] popups (xdg_popup: placed from their positioner; a Quickshell PopupWindow shows where anchored)
 - [ ] nested backend (winit) for looking at it live, only when asked
 
 ## 1. Windows
