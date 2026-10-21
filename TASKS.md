@@ -58,7 +58,12 @@ The milestones of [PLAN.md](PLAN.md), each step a line; ticked when it works wit
 
 ## 5. The rest of a day
 
-- [ ] XWayland (Steam, games)
+- [ ] Xwayland on demand: X11 display + window manager (X windows tiled, in `hyprctl clients` with xwayland: true), menus/tooltips/dialogs placed by window type
+- [ ] X clipboard and drag and drop shared with Wayland; HiDPI per app (sharp or scaled)
+- [ ] Steam and games (fullscreen, pointer lock, direct scanout) on the real screen (M4)
+- [ ] loom's own X server (Rust): core protocol + MIT-SHM + XKB + RandR; xterm, xeyes, xclock run without Xwayland
+- [ ] own X server grows: Render, Composite, XFixes, Damage, XInput2, then DRI3 + Present + GLX (games)
+- [ ] per-app setting: which X server a program gets (own one when it can, Xwayland otherwise)
 - [ ] screencopy (wlr-screencopy, ext-image-copy-capture): portals, OBS, Snip
 - [ ] ext-session-lock (the lock screen), idle notify / inhibit
 - [ ] input method, tablet v2 (the pen), gestures, gamma

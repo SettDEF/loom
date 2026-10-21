@@ -6,7 +6,7 @@ description = "A Wayland compositor that speaks Hyprland's and KDE's protocols"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-smithay = { version = "0.7", default-features = false, features = ["wayland_frontend", "desktop", "renderer_pixman", "renderer_gl", "backend_winit", "backend_egl"] }
+smithay = { version = "0.7", default-features = false, features = ["wayland_frontend", "desktop", "renderer_pixman", "renderer_gl", "backend_winit", "backend_egl", "xwayland"] }
 png = "0.17"
 serde_json = "1"
 wayland-server = "0.31"

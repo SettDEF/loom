@@ -31,8 +31,12 @@ Hyprland's internals on every release. loom is built for both from the start.
 - **Extensions later, from the KDE Store**: KWin scripts and effects from store.kde.org run on
   loom as they do on KWin (its scripting API), plus loom's own (custom animations, effects);
   install, update and remove from one place, and they simply work.
-- **X windows natively**: XWayland built in so X programs are ordinary windows (sharp at any
-  scale, clipboard and drag and drop shared, games and Steam fine).
+- **X windows natively**: X programs are ordinary windows (sharp at any scale, clipboard and
+  drag and drop shared, games and Steam fine). Two X servers (the user, 2026-10-21): Xwayland
+  started on demand first, so everything runs soon; then loom's own X server in Rust (the
+  `xserver` module, drawing X windows itself, no Xwayland), starting with simple programs (core
+  protocol, MIT-SHM, XKB, RandR) and growing; a per-app setting says which server a program
+  gets, and games stay on Xwayland until loom's covers DRI3, GLX, Present and XInput2.
 - **Both desktops perfectly**: everything the shell expects of Hyprland, everything KDE's
   programs expect of KWin.
 
