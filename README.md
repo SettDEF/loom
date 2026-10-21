@@ -1,4 +1,4 @@
-# zeal
+# loom
 
 A Wayland compositor for this desktop, in Rust on Smithay. It speaks Hyprland's protocols and
 IPC (the `ii` shell runs on it unchanged) and KDE's (System Settings › Display, kscreen-doctor).

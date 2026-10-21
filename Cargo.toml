@@ -1,5 +1,5 @@
 [package]
-name = "zeal"
+name = "loom"
 version = "0.1.0"
 edition = "2024"
 description = "A Wayland compositor that speaks Hyprland's and KDE's protocols"

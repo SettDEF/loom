@@ -26,7 +26,7 @@ use smithay::{
     wayland::socket::ListeningSocketSource,
 };
 
-use crate::state::{client_data, Zeal};
+use crate::state::{client_data, Loom};
 
 pub struct Options {
     pub size: (i32, i32),
@@ -37,9 +37,9 @@ pub struct Options {
 }
 
 pub fn run(opts: Options) -> Result<(), Box<dyn std::error::Error>> {
-    let mut event_loop: EventLoop<Zeal> = EventLoop::try_new()?;
-    let display: Display<Zeal> = Display::new()?;
-    let mut state = Zeal::new(display.handle(), event_loop.get_signal());
+    let mut event_loop: EventLoop<Loom> = EventLoop::try_new()?;
+    let display: Display<Loom> = Display::new()?;
+    let mut state = Loom::new(display.handle(), event_loop.get_signal());
 
     // clients connect here
     let socket = match &opts.socket {
@@ -47,20 +47,20 @@ pub fn run(opts: Options) -> Result<(), Box<dyn std::error::Error>> {
         None => ListeningSocketSource::new_auto()?,
     };
     let socket_name = socket.socket_name().to_string_lossy().to_string();
-    event_loop.handle().insert_source(socket, |stream, _, state: &mut Zeal| {
+    event_loop.handle().insert_source(socket, |stream, _, state: &mut Loom| {
         let _ = state.dh.insert_client(stream, client_data());
     })?;
-    event_loop.handle().insert_source(Generic::new(display, Interest::READ, smithay::reexports::calloop::Mode::Level), |_, display, state: &mut Zeal| {
+    event_loop.handle().insert_source(Generic::new(display, Interest::READ, smithay::reexports::calloop::Mode::Level), |_, display, state: &mut Loom| {
         // Safety: the display is not dropped while the source lives
         unsafe { display.get_mut().dispatch_clients(state).ok() };
         Ok(PostAction::Continue)
     })?;
-    eprintln!("zeal: WAYLAND_DISPLAY={socket_name}");
+    eprintln!("loom: WAYLAND_DISPLAY={socket_name}");
 
     // the output
     let (w, h) = opts.size;
-    let output = Output::new("HEADLESS-1".into(), PhysicalProperties { size: (0, 0).into(), subpixel: Subpixel::Unknown, make: "zeal".into(), model: "headless".into() });
-    let _global = output.create_global::<Zeal>(&state.dh);
+    let output = Output::new("HEADLESS-1".into(), PhysicalProperties { size: (0, 0).into(), subpixel: Subpixel::Unknown, make: "loom".into(), model: "headless".into() });
+    let _global = output.create_global::<Loom>(&state.dh);
     let mode = Mode { size: (w, h).into(), refresh: 60_000 };
     output.change_current_state(Some(mode), Some(Transform::Normal), Some(Scale::Integer(1)), Some((0, 0).into()));
     output.set_preferred(mode);
@@ -72,7 +72,7 @@ pub fn run(opts: Options) -> Result<(), Box<dyn std::error::Error>> {
     let mut damage = OutputDamageTracker::from_output(&output);
 
     // a frame every 16 ms: draw, then tell the windows they were shown
-    event_loop.handle().insert_source(Timer::from_duration(Duration::from_millis(16)), move |_, _, state: &mut Zeal| {
+    event_loop.handle().insert_source(Timer::from_duration(Duration::from_millis(16)), move |_, _, state: &mut Loom| {
         if let Ok(mut fb) = renderer.bind(&mut image) {
             let _ = render_output::<_, WaylandSurfaceRenderElement<PixmanRenderer>, _, _>(&output, &mut renderer, &mut fb, 1.0, 0, [&state.space], &[], &mut damage, [0.08, 0.08, 0.1, 1.0]);
         }
@@ -84,8 +84,8 @@ pub fn run(opts: Options) -> Result<(), Box<dyn std::error::Error>> {
         let _ = state.dh.flush_clients();
         if let (Some(path), true) = (&opts.snapshot, state.start.elapsed() >= opts.wait) {
             match save_png(&image, path) {
-                Ok(()) => eprintln!("zeal: wrote {}", path.display()),
-                Err(e) => eprintln!("zeal: {e}"),
+                Ok(()) => eprintln!("loom: wrote {}", path.display()),
+                Err(e) => eprintln!("loom: {e}"),
             }
             state.signal.stop();
         }

@@ -32,35 +32,35 @@ use smithay::{
 
 use smithay::backend::renderer::utils::on_commit_buffer_handler;
 
-pub struct Zeal {
+pub struct Loom {
     pub dh: DisplayHandle,
     pub start: Instant,
     pub signal: LoopSignal,
     pub compositor_state: CompositorState,
     pub xdg_shell_state: XdgShellState,
     pub shm_state: ShmState,
-    pub seat_state: SeatState<Zeal>,
+    pub seat_state: SeatState<Loom>,
     pub data_device_state: DataDeviceState,
     pub output_manager_state: OutputManagerState,
-    pub seat: Seat<Zeal>,
+    pub seat: Seat<Loom>,
     /// the windows and where they are
     pub space: Space<Window>,
     /// the one output while there is one (headless, nested)
     pub output: Option<Output>,
 }
 
-impl Zeal {
-    pub fn new(dh: DisplayHandle, signal: LoopSignal) -> Zeal {
+impl Loom {
+    pub fn new(dh: DisplayHandle, signal: LoopSignal) -> Loom {
         let mut seat_state = SeatState::new();
         let mut seat = seat_state.new_wl_seat(&dh, "seat0");
         seat.add_keyboard(Default::default(), 600, 25).expect("keyboard");
         seat.add_pointer();
-        Zeal {
-            compositor_state: CompositorState::new::<Zeal>(&dh),
-            xdg_shell_state: XdgShellState::new::<Zeal>(&dh),
-            shm_state: ShmState::new::<Zeal>(&dh, vec![]),
-            data_device_state: DataDeviceState::new::<Zeal>(&dh),
-            output_manager_state: OutputManagerState::new_with_xdg_output::<Zeal>(&dh),
+        Loom {
+            compositor_state: CompositorState::new::<Loom>(&dh),
+            xdg_shell_state: XdgShellState::new::<Loom>(&dh),
+            shm_state: ShmState::new::<Loom>(&dh, vec![]),
+            data_device_state: DataDeviceState::new::<Loom>(&dh),
+            output_manager_state: OutputManagerState::new_with_xdg_output::<Loom>(&dh),
             seat_state,
             seat,
             space: Space::default(),
@@ -97,7 +97,7 @@ impl Zeal {
     }
 }
 
-impl CompositorHandler for Zeal {
+impl CompositorHandler for Loom {
     fn compositor_state(&mut self) -> &mut CompositorState {
         &mut self.compositor_state
     }
@@ -125,7 +125,7 @@ impl CompositorHandler for Zeal {
     }
 }
 
-impl XdgShellHandler for Zeal {
+impl XdgShellHandler for Loom {
     fn xdg_shell_state(&mut self) -> &mut XdgShellState {
         &mut self.xdg_shell_state
     }
@@ -149,17 +149,17 @@ impl XdgShellHandler for Zeal {
     fn reposition_request(&mut self, _surface: PopupSurface, _positioner: PositionerState, _token: u32) {}
 }
 
-impl BufferHandler for Zeal {
+impl BufferHandler for Loom {
     fn buffer_destroyed(&mut self, _buffer: &wl_buffer::WlBuffer) {}
 }
 
-impl ShmHandler for Zeal {
+impl ShmHandler for Loom {
     fn shm_state(&self) -> &ShmState {
         &self.shm_state
     }
 }
 
-impl SeatHandler for Zeal {
+impl SeatHandler for Loom {
     type KeyboardFocus = WlSurface;
     type PointerFocus = WlSurface;
     type TouchFocus = WlSurface;
@@ -168,23 +168,23 @@ impl SeatHandler for Zeal {
     }
 }
 
-impl SelectionHandler for Zeal {
+impl SelectionHandler for Loom {
     type SelectionUserData = ();
 }
 
-impl DataDeviceHandler for Zeal {
+impl DataDeviceHandler for Loom {
     fn data_device_state(&self) -> &DataDeviceState {
         &self.data_device_state
     }
 }
-impl ClientDndGrabHandler for Zeal {}
-impl ServerDndGrabHandler for Zeal {
+impl ClientDndGrabHandler for Loom {}
+impl ServerDndGrabHandler for Loom {
     fn send(&mut self, _mime_type: String, _fd: OwnedFd, _seat: Seat<Self>) {}
 }
 
-impl OutputHandler for Zeal {}
+impl OutputHandler for Loom {}
 
-/// What zeal keeps per client.
+/// What loom keeps per client.
 #[derive(Default)]
 pub struct ClientState {
     pub compositor_state: CompositorClientState,
@@ -198,9 +198,9 @@ pub fn client_data() -> Arc<ClientState> {
     Arc::new(ClientState::default())
 }
 
-delegate_compositor!(Zeal);
-delegate_xdg_shell!(Zeal);
-delegate_shm!(Zeal);
-delegate_seat!(Zeal);
-delegate_data_device!(Zeal);
-delegate_output!(Zeal);
+delegate_compositor!(Loom);
+delegate_xdg_shell!(Loom);
+delegate_shm!(Loom);
+delegate_seat!(Loom);
+delegate_data_device!(Loom);
+delegate_output!(Loom);

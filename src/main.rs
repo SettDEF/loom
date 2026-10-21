@@ -1,6 +1,6 @@
-//! zeal: a Wayland compositor that speaks Hyprland's and KDE's protocols (see PLAN.md).
+//! loom: a Wayland compositor that speaks Hyprland's and KDE's protocols (see PLAN.md).
 //!
-//!   zeal --headless [--size 1280x720] [--snapshot out.png] [--wait 2000] [--socket NAME] [-- CMD …]
+//!   loom --headless [--size 1280x720] [--snapshot out.png] [--wait 2000] [--socket NAME] [-- CMD …]
 
 mod headless;
 mod state;
@@ -27,21 +27,21 @@ fn main() {
                 opts.run = args.by_ref().collect();
             }
             "-h" | "--help" => {
-                println!("zeal --headless [--size WxH] [--snapshot out.png] [--wait ms] [--socket NAME] [-- CMD …]");
+                println!("loom --headless [--size WxH] [--snapshot out.png] [--wait ms] [--socket NAME] [-- CMD …]");
                 return;
             }
             other => {
-                eprintln!("zeal: unknown argument {other}");
+                eprintln!("loom: unknown argument {other}");
                 std::process::exit(2);
             }
         }
     }
     if !headless {
-        eprintln!("zeal: only --headless so far (milestone 0); the TTY backend is milestone 4");
+        eprintln!("loom: only --headless so far (milestone 0); the TTY backend is milestone 4");
         std::process::exit(2);
     }
     if let Err(e) = headless::run(opts) {
-        eprintln!("zeal: {e}");
+        eprintln!("loom: {e}");
         std::process::exit(1);
     }
 }
