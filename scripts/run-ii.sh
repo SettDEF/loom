@@ -23,10 +23,7 @@ done
 bwrap --ro-bind / / --dev /dev --proc /proc --tmpfs /tmp --dir /tmp/.X11-unix \
   --unshare-pid --unshare-ipc --die-with-parent --new-session \
   --tmpfs /run/user/"$(id -u)" --tmpfs /run/dbus \
-  --overlay-src "$HOME/.config" --tmp-overlay "$HOME/.config" \
-  --overlay-src "$HOME/.local/share" --tmp-overlay "$HOME/.local/share" \
-  --overlay-src "$HOME/.cache" --tmp-overlay "$HOME/.cache" \
-  --overlay-src "$HOME/.local/state" --tmp-overlay "$HOME/.local/state" \
+  --overlay-src "$HOME" --tmp-overlay "$HOME" \
   $NOKEYRING \
   --bind "$T/out" /tmp/out \
   --ro-bind "$(dirname "$(readlink -f "$0")")/sandbox-bin" /tmp/sandbox-bin --setenv PATH "/tmp/sandbox-bin:$PATH" \
