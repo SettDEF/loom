@@ -16,6 +16,7 @@ mod focus;
 mod gpu;
 mod foreign;
 mod input;
+mod kwin_fx;
 mod layouts;
 mod pointer;
 mod screencopy;

@@ -22,11 +22,13 @@ pub struct Look {
     /// between two windows, and to the screen's edge (Hyprland's general:gaps_in, gaps_out)
     pub gaps_in: f32,
     pub gaps_out: f32,
+    /// whose window animations: "loom" (its own, Hyprland-like) or "kwin" (KDE's effects, kwin_fx)
+    pub animations: String,
 }
 
 impl Default for Look {
     fn default() -> Self {
-        Look { rounding: 0.0, rounding_power: 2.0, gaps_in: 5.0, gaps_out: 20.0 }
+        Look { rounding: 0.0, rounding_power: 2.0, gaps_in: 5.0, gaps_out: 20.0, animations: "loom".into() }
     }
 }
 
@@ -80,7 +82,7 @@ pub fn from_hyprland() -> Look {
     let v = hyprland_values(&home().join(".config/hypr/hyprland.conf"));
     let num = |k: &str, d: f32| v.get(k).and_then(|s| s.parse().ok()).unwrap_or(d);
     let d = Look::default();
-    Look { rounding: num("decoration:rounding", d.rounding), rounding_power: num("decoration:rounding_power", d.rounding_power), gaps_in: num("general:gaps_in", d.gaps_in), gaps_out: num("general:gaps_out", d.gaps_out) }
+    Look { rounding: num("decoration:rounding", d.rounding), rounding_power: num("decoration:rounding_power", d.rounding_power), gaps_in: num("general:gaps_in", d.gaps_in), gaps_out: num("general:gaps_out", d.gaps_out), animations: d.animations }
 }
 
 /// Hyprland's defaults with init.lua run over them; the error, if the file has one.
@@ -103,6 +105,7 @@ fn run_lua(src: &str, base: &Look) -> Result<Look, String> {
     opt.set("rounding_power", base.rounding_power).map_err(e)?;
     opt.set("gaps_in", base.gaps_in).map_err(e)?;
     opt.set("gaps_out", base.gaps_out).map_err(e)?;
+    opt.set("animations", base.animations.as_str()).map_err(e)?;
     // what Hyprland's config says, to read (loom.hyprland.rounding)
     let hypr = lua.create_table().map_err(e)?;
     hypr.set("rounding", base.rounding).map_err(e)?;
@@ -138,6 +141,11 @@ fn run_lua(src: &str, base: &Look) -> Result<Look, String> {
         rounding_power: get("rounding_power", base.rounding_power)?.clamp(1.0, 10.0),
         gaps_in: get("gaps_in", base.gaps_in)?.max(0.0),
         gaps_out: get("gaps_out", base.gaps_out)?.max(0.0),
+        animations: match opt.get::<mlua::Value>("animations").map_err(e)? {
+            mlua::Value::String(s) if matches!(s.to_str().map(|x| x.to_string()).unwrap_or_default().as_str(), "loom" | "kwin") => s.to_str().map(|x| x.to_string()).unwrap_or_default(),
+            mlua::Value::Nil => base.animations.clone(),
+            other => return Err(format!("loom.opt.animations must be \"loom\" or \"kwin\", not {}", other.type_name())),
+        },
     })
 }
 
@@ -202,7 +210,7 @@ mod tests {
 
     #[test]
     fn lua_sets_options_both_ways() {
-        let base = Look { rounding: 18.0, rounding_power: 2.0, gaps_in: 4.0, gaps_out: 5.0 };
+        let base = Look { rounding: 18.0, rounding_power: 2.0, gaps_in: 4.0, gaps_out: 5.0, animations: "loom".into() };
         assert_eq!(run_lua("loom.opt.rounding = 12", &base).unwrap().rounding, 12.0);
         let l = run_lua("loom.setup { rounding = 6, rounding_power = 3 }", &base).unwrap();
         assert_eq!((l.rounding, l.rounding_power), (6.0, 3.0));
@@ -224,5 +232,15 @@ mod tests {
         assert_eq!(v.get("decoration:rounding_power").map(String::as_str), Some("2.4"));
         assert_eq!(v.get("decoration:blur:size").map(String::as_str), Some("8"));
         assert_eq!(v.get("general:gaps_in").map(String::as_str), Some("5"));
+    }
+}
+
+#[cfg(test)]
+mod anim_opt {
+    #[test]
+    fn animations_option() {
+        let base = super::Look { rounding: 0.0, rounding_power: 2.0, gaps_in: 4.0, gaps_out: 5.0, animations: "loom".into() };
+        assert_eq!(super::run_lua("loom.opt.animations = 'kwin'", &base).unwrap().animations, "kwin");
+        assert!(super::run_lua("loom.opt.animations = 'wobbly'", &base).is_err());
     }
 }
