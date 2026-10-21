@@ -58,7 +58,9 @@ pub fn run(socket: Option<String>, run: Vec<String>) -> Result<(), Box<dyn std::
     let display: Display<Loom> = Display::new()?;
     let mut state = Loom::new(display.handle(), event_loop.get_signal());
 
-    let (mut backend, winit_loop) = winit::init::<GlesRenderer>()?;
+    // the window on the desktop it runs in: named loom (Hyprland's rules and title bars see that)
+    let attrs = smithay::reexports::winit::window::WindowAttributes::default().with_title("loom").with_inner_size(smithay::reexports::winit::dpi::LogicalSize::new(1280.0, 800.0));
+    let (mut backend, winit_loop) = winit::init_from_attributes::<GlesRenderer>(attrs)?;
     let formats = backend.renderer().dmabuf_formats();
     let mut dmabuf_state = DmabufState::new();
     let dmabuf_global = dmabuf_state.create_global::<Loom>(&state.dh, formats);
