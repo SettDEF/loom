@@ -20,7 +20,7 @@ for f in /usr/share/dbus-1/services/*[Ss]ecret* /usr/share/dbus-1/services/*keyr
   [ -e "$f" ] && NOKEYRING="$NOKEYRING --ro-bind /dev/null $f"
 done
 
-bwrap --ro-bind / / --dev /dev --proc /proc --tmpfs /tmp \
+bwrap --ro-bind / / --dev /dev --proc /proc --tmpfs /tmp --dir /tmp/.X11-unix \
   --unshare-pid --unshare-ipc --die-with-parent --new-session \
   --tmpfs /run/user/"$(id -u)" --tmpfs /run/dbus \
   --overlay-src "$HOME/.config" --tmp-overlay "$HOME/.config" \
