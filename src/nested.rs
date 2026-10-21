@@ -141,6 +141,9 @@ pub fn run(socket: Option<String>, run: Vec<String>) -> Result<(), Box<dyn std::
             state.nested = Some(nested);
             let ms = state.now_ms();
             for w in state.space.elements() {
+                if !state.wants_frame(w) {
+                    continue;
+                }
                 w.send_frame(&out3, Duration::from_millis(ms as u64), Some(Duration::ZERO), |_, _| Some(out3.clone()));
             }
             for l in smithay::desktop::layer_map_for_output(&out3).layers() {

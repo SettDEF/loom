@@ -113,6 +113,9 @@ pub fn run(opts: Options) -> Result<(), Box<dyn std::error::Error>> {
             }
             let now = state.now_ms();
             for w in state.space.elements() {
+                if !state.wants_frame(w) {
+                    continue;
+                }
                 w.send_frame(&output, Duration::from_millis(now as u64), Some(Duration::ZERO), |_, _| Some(output.clone()));
             }
             let map = smithay::desktop::layer_map_for_output(&output);

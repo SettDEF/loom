@@ -47,7 +47,8 @@ Hyprland's internals on every release. loom is built for both from the start.
   into tables; anything new on a hot path is measured, not assumed.
 - **Battery**: an idle desktop wakes loom 0 times a second (frames are event driven, paced to the
   refresh, never a ticking timer); `scripts/idle-cost.sh` checks it. Hidden workspaces get no
-  frame callbacks, so their programs stop drawing. Only damaged regions go to the screen.
+  frame callbacks, nor do windows under a fullscreen one (gears demo: 710 ms CPU in 4 s visible,
+  0 ms covered), so their programs stop drawing. Only damaged regions go to the screen.
 
 - Never replace the running session while testing: every milestone is tested **headless**
   (loom's own off-screen backend, a picture of what it shows) or nested, never on the TTY until

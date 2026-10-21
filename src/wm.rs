@@ -459,3 +459,14 @@ fn evdev_of(name: &str) -> Option<u32> {
     }
     "1234567890".find(c).map(|i| 2 + i as u32)
 }
+
+impl Loom {
+    /// Whether a window is told to draw its next frame: not when a fullscreen window covers it
+    /// (it cannot be seen; its program idles instead of drawing for nothing).
+    pub fn wants_frame(&self, w: &Window) -> bool {
+        match &self.fullscreen {
+            Some(f) if self.managed_of(f).is_some_and(|m| m.ws == self.active_ws) => f == w || self.managed_of(w).is_none(),
+            _ => true,
+        }
+    }
+}
