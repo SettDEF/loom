@@ -21,6 +21,10 @@ pub enum Key {
     /// `code:N`, the xkb keycode
     Code(u32),
     Catchall,
+    /// `mouse:N`, the evdev button (272 = left)
+    Mouse(u32),
+    /// `mouse_up` 0, `mouse_down` 1, `mouse_left` 2, `mouse_right` 3
+    Scroll(u8),
 }
 
 #[derive(Debug, Clone, Default)]
@@ -110,8 +114,15 @@ fn key_of(s: &str) -> Option<Key> {
     if let Some(n) = s.strip_prefix("code:") {
         return n.trim().parse().ok().map(Key::Code);
     }
-    if s.starts_with("mouse") {
-        return None;
+    if let Some(n) = s.strip_prefix("mouse:") {
+        return n.trim().parse().ok().map(Key::Mouse);
+    }
+    match s {
+        "mouse_up" => return Some(Key::Scroll(0)),
+        "mouse_down" => return Some(Key::Scroll(1)),
+        "mouse_left" => return Some(Key::Scroll(2)),
+        "mouse_right" => return Some(Key::Scroll(3)),
+        _ => {}
     }
     // raw (unshifted) syms are lower case for letters
     let name = if s.chars().count() == 1 { s.to_lowercase() } else { s.to_string() };
@@ -180,10 +191,6 @@ impl Binds {
             locked: flags.contains('l'),
         };
         let with_desc = flags.contains('d');
-        if flags.contains('m') {
-            self.skipped += 1;
-            return;
-        }
         let parts: Vec<&str> = rest.splitn(if with_desc { 5 } else { 4 }, ',').map(str::trim).collect();
         let (mods, key, desc, disp, args) = match (with_desc, parts.as_slice()) {
             (true, [m, k, d, disp, a @ ..]) => (*m, *k, *d, *disp, a.first().copied().unwrap_or("")),
@@ -195,6 +202,8 @@ impl Binds {
             return;
         };
         let action = if args.is_empty() { disp.to_string() } else { format!("{disp} {args}") };
+        // bindm: a drag while the button is held (move or resize the window under the pointer)
+        let action = if flags.contains('m') { format!("__drag {disp}") } else { action };
         let i = self.binds.len();
         self.binds.push(Bind { mods: mods_of(mods), key, flags: f, action, description: desc.to_string() });
         let t = self.tables.entry(submap.to_string()).or_default();
@@ -230,7 +239,7 @@ impl Binds {
             let own = match key {
                 Key::Sym(s) => self_mod(s),
                 Key::Code(c) => self_mod_code(c),
-                Key::Catchall => 0,
+                _ => 0,
             };
             let Some(list) = t.by_key.get(&key) else { continue };
             for &i in list {
@@ -272,7 +281,7 @@ impl Binds {
 
     /// Hyprland's `binds` answer, roughly.
     pub fn list(&self) -> Vec<serde_json::Value> {
-        self.binds.iter().map(|b| serde_json::json!({ "modmask": b.mods, "key": match b.key { Key::Sym(s) => xkb::keysym_get_name(xkb::Keysym::new(s)), Key::Code(c) => format!("code:{c}"), Key::Catchall => "catchall".into() }, "release": b.flags.release, "repeat": b.flags.repeat, "non_consuming": b.flags.non_consuming, "description": b.description, "dispatcher": b.action.split_once(' ').map_or(b.action.as_str(), |x| x.0), "arg": b.action.split_once(' ').map_or("", |x| x.1) })).collect()
+        self.binds.iter().map(|b| serde_json::json!({ "modmask": b.mods, "key": match b.key { Key::Sym(s) => xkb::keysym_get_name(xkb::Keysym::new(s)), Key::Code(c) => format!("code:{c}"), Key::Catchall => "catchall".into(), Key::Mouse(n) => format!("mouse:{n}"), Key::Scroll(d) => ["mouse_up", "mouse_down", "mouse_left", "mouse_right"][d as usize % 4].into() }, "release": b.flags.release, "repeat": b.flags.repeat, "non_consuming": b.flags.non_consuming, "description": b.description, "dispatcher": b.action.split_once(' ').map_or(b.action.as_str(), |x| x.0), "arg": b.action.split_once(' ').map_or("", |x| x.1) })).collect()
     }
 }
 
@@ -365,5 +374,26 @@ impl crate::state::Loom {
             }
             TimeoutAction::ToDuration(std::time::Duration::from_millis(40))
         });
+    }
+}
+
+impl Binds {
+    /// A mouse button or scroll bind: the actions, and whether the program loses the event.
+    pub fn mouse(&mut self, key: Key, mods: u8, pressed: bool) -> (Option<Vec<String>>, bool) {
+        let Some(t) = self.tables.get(&self.submap) else { return (None, false) };
+        let Some(list) = t.by_key.get(&key) else { return (None, false) };
+        let mut out: Option<Vec<String>> = None;
+        let mut consume = false;
+        for &i in list {
+            let b = &self.binds[i];
+            // a drag starts on the press; other binds fire on press unless they are release binds
+            let on_press = b.action.starts_with("__drag") || !b.flags.release;
+            if on_press != pressed || (!b.flags.ignore_mods && b.mods != mods) {
+                continue;
+            }
+            consume |= !b.flags.non_consuming;
+            out.get_or_insert_with(Vec::new).push(b.action.clone());
+        }
+        (out, consume)
     }
 }

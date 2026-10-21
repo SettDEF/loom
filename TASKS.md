@@ -23,7 +23,8 @@ The milestones of [PLAN.md](PLAN.md), each step a line; ticked when it works wit
 - [x] keybinds: the user's own Hyprland config read as it is (sources, $vars, submaps, bind flags r e n i d, catchall, code:N, Super alone); 345 binds; one hash lookup per key, no allocation unless one matches; `keyword bind/unbind`, `hyprctl binds`, `submap`
 - [x] dispatchers: workspace, movetoworkspace(silent), exec, killactive, togglefloating, focuswindow, global, layoutmsg, submap, movefocus, cyclenext, bringactivetotop, fullscreen
 - [x] sendshortcut (vim mode: h → Left, tested), movewindow, togglespecialworkspace + special workspace, pin, resizeactive; repeating binds (binde, held keys repeat at 600 ms / 25 Hz)
-- [ ] mouse binds (bindm move/resize, mouse:N, scroll); focuswindow by class:/title:
+- [x] mouse binds: bindm Super+drag moves (a tiled window floats while moved, is tiled again in the slot it is dropped on), Super+right-drag resizes (a tiled one moves the layout's master share), mouse:N buttons, Super+scroll (300 ms apart, as Hyprland); one pointer path for nested and headless (--sdrag, --sscroll)
+- [x] Hyprland 0.56's Lua dispatch (`hl.dsp.focus({ workspace = 3 })` …, the 25 the shell sends) read and carried out; focuswindow by address:/class:/title:/pid:; movewindowpixel, movecursor, exec [workspace N silent]; focus moves on when a window leaves
 - [ ] xdg-decoration (server side), borders, gaps
 - [ ] fractional scale, viewporter, cursor shape, primary selection, xdg-activation
 

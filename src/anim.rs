@@ -116,6 +116,11 @@ impl WindowAnim {
         self.x.retarget(x, d, now);
         self.y.retarget(y, d, now);
     }
+    /// Straight there, no glide (a window dragged by hand).
+    pub fn jump_to(&mut self, x: f64, y: f64) {
+        self.x = Anim::still(x);
+        self.y = Anim::still(y);
+    }
     pub fn done(&self, now: Instant) -> bool {
         !self.waiting && self.x.done(now) && self.y.done(now) && self.alpha.done(now) && self.scale.done(now)
     }

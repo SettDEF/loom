@@ -48,7 +48,18 @@ impl Loom {
             Some(x) => x.pid().map(|p| p as i32).unwrap_or(-1),
             None => window.toplevel().and_then(|t| t.wl_surface().client()).and_then(|c| c.get_credentials(&self.dh).ok()).map(|c| c.pid).unwrap_or(-1),
         };
-        self.managed.push(Managed { window: window.clone(), addr, ws: self.active_ws, pid, floating: float_at.is_some(), pinned: false });
+        // started with `exec [workspace N silent]`: its window goes there (by its process or a parent)
+        let ruled = self.exec_rule_for(pid);
+        let ws = ruled.map(|r| r.0).unwrap_or(self.active_ws);
+        if ws != self.active_ws && !ruled.is_some_and(|r| r.1) {
+            self.switch_workspace(ws);
+        }
+        self.managed.push(Managed { window: window.clone(), addr, ws, pid, floating: float_at.is_some(), pinned: false });
+        if ws != self.active_ws {
+            self.hypr_event(&format!("openwindow>>{addr:x},{ws},{},{}", self.class_of(&window), self.title_of(&window)));
+            self.foreign_opened(addr);
+            return;
+        }
         self.space.map_element(window.clone(), float_at.unwrap_or_default(), true);
         if let Some(at) = float_at {
             self.anims.insert(addr, WindowAnim::opening(at.x as f64, at.y as f64));
@@ -193,6 +204,10 @@ impl Loom {
         self.focused = None;
         self.hypr_event(&format!("movewindowv2>>{addr:x},{n},{n}"));
         self.relayout();
+        // the focus to the next window here, as Hyprland does
+        if let Some(next) = self.managed.iter().rev().find(|m| m.ws == self.active_ws).map(|m| m.window.clone()) {
+            self.focus_window(&next);
+        }
     }
 
     /// swapmaster: the focused window first on its workspace (the master slot).
@@ -472,5 +487,50 @@ impl Loom {
             Some(f) if self.managed_of(f).is_some_and(|m| m.ws == self.active_ws) => f == w || self.managed_of(w).is_none(),
             _ => true,
         }
+    }
+}
+
+impl Loom {
+    /// The `exec [workspace N silent]` rule for a window's process (it or one of its parents was
+    /// started so): (workspace, silent), used up.
+    fn exec_rule_for(&mut self, pid: i32) -> Option<(i32, bool)> {
+        if self.exec_rules.is_empty() || pid <= 0 {
+            return None;
+        }
+        let mut p = pid as u32;
+        for _ in 0..6 {
+            if let Some(i) = self.exec_rules.iter().position(|r| r.0 == p) {
+                let (_, ws, silent) = self.exec_rules.remove(i);
+                return Some((ws, silent));
+            }
+            let stat = std::fs::read_to_string(format!("/proc/{p}/stat")).ok()?;
+            p = stat[stat.rfind(')')? + 2..].split_whitespace().nth(1)?.parse().ok()?;
+            if p <= 1 {
+                break;
+            }
+        }
+        None
+    }
+}
+
+impl Loom {
+    /// The area the tiling fills (what the layers leave, less Hyprland's outer gaps).
+    pub fn tile_area(&self) -> Option<Rectangle<i32, Logical>> {
+        let output = self.output.clone()?;
+        let geo = self.space.output_geometry(&output)?;
+        let mut area = layer_map_for_output(&output).non_exclusive_zone();
+        area.loc += geo.loc;
+        let inset = GAPS_OUT - GAPS_IN;
+        Some(Rectangle::new((area.loc.x + inset, area.loc.y + inset).into(), (area.size.w - 2 * inset, area.size.h - 2 * inset).into()))
+    }
+
+    /// The tiled window whose layout slot holds `at` (counting `with` as tiled), by the layout
+    /// itself rather than where the windows are drawn right now.
+    pub fn tile_slot_at(&self, at: smithay::utils::Point<f64, Logical>, with: &Window) -> Option<Window> {
+        let area = self.tile_area()?;
+        let tiled: Vec<Window> = self.managed.iter().filter(|m| m.ws == self.active_ws && (!m.floating || &m.window == with)).map(|m| m.window.clone()).collect();
+        let suit = self.layouts.of(&self.active_ws.to_string());
+        let rects = crate::layouts::arrange(tiled.len(), area, &suit);
+        tiled.into_iter().zip(rects).find(|(_, r)| r.to_f64().contains(at)).map(|(w, _)| w)
     }
 }

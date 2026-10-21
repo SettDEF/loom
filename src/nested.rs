@@ -6,19 +6,16 @@ use std::{process::Command, time::Duration};
 
 use smithay::{
     backend::{
-        input::{AbsolutePositionEvent, Axis, AxisSource, ButtonState, Event, InputEvent, KeyboardKeyEvent, PointerAxisEvent, PointerButtonEvent},
+        input::{AbsolutePositionEvent, Axis, ButtonState, InputEvent, KeyboardKeyEvent, PointerAxisEvent, PointerButtonEvent},
         renderer::{damage::OutputDamageTracker, gles::GlesRenderer},
         winit::{self, WinitEvent, WinitGraphicsBackend},
-    },
-    input::{
-        pointer::{AxisFrame, ButtonEvent, MotionEvent},
     },
     output::{Mode, Output, PhysicalProperties, Scale, Subpixel},
     reexports::{
         calloop::{generic::Generic, EventLoop, Interest, PostAction},
         wayland_server::Display,
     },
-    utils::{Transform, SERIAL_COUNTER},
+    utils::Transform,
     wayland::{
 
         socket::ListeningSocketSource,
@@ -170,34 +167,14 @@ impl Loom {
                 let Some(output) = self.output.clone() else { return };
                 let size = output.current_mode().map(|m| m.size.to_logical(1)).unwrap_or_default();
                 let at = event.position_transformed(size);
-                self.pointer_at = at;
-                let focus = self.surface_at(at);
-                let pointer = self.seat.get_pointer().expect("pointer");
-                pointer.motion(self, focus, &MotionEvent { location: at, serial: SERIAL_COUNTER.next_serial(), time });
-                pointer.frame(self);
+                self.pointer_move(at, time);
             }
-            InputEvent::PointerButton { event } => {
-                let pointer = self.seat.get_pointer().expect("pointer");
-                if event.state() == ButtonState::Pressed {
-                    self.grab_press(self.pointer_at);
-                    // a press on a window: it comes up and has the keyboard
-                    if let Some((w, _)) = self.space.element_under(self.pointer_at).map(|(w, l)| (w.clone(), l)) {
-                        self.focus_window(&w);
-                    }
-                }
-                pointer.button(self, &ButtonEvent { button: event.button_code(), state: event.state(), serial: SERIAL_COUNTER.next_serial(), time });
-                pointer.frame(self);
-            }
+            InputEvent::PointerButton { event } => self.pointer_button(event.button_code(), event.state() == ButtonState::Pressed, time),
             InputEvent::PointerAxis { event } => {
-                let mut frame = AxisFrame::new(event.time_msec()).source(AxisSource::Wheel);
-                for axis in [Axis::Vertical, Axis::Horizontal] {
-                    if let Some(v) = event.amount(axis).or_else(|| event.amount_v120(axis).map(|v| v * 15.0 / 120.0)) {
-                        frame = frame.value(axis, v);
-                    }
-                }
-                let pointer = self.seat.get_pointer().expect("pointer");
-                pointer.axis(self, frame);
-                pointer.frame(self);
+                let v = event.amount(Axis::Vertical).or_else(|| event.amount_v120(Axis::Vertical).map(|v| v * 15.0 / 120.0)).unwrap_or(0.0);
+                let h = event.amount(Axis::Horizontal).or_else(|| event.amount_v120(Axis::Horizontal).map(|v| v * 15.0 / 120.0)).unwrap_or(0.0);
+                let notches = Some((event.amount_v120(Axis::Vertical).unwrap_or(0.0), event.amount_v120(Axis::Horizontal).unwrap_or(0.0)));
+                self.pointer_scroll(event.source(), v, h, notches, time);
             }
             _ => {}
         }

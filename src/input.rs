@@ -3,12 +3,8 @@
 //! mouse make, so what a test types reaches clients the way a person's would.
 
 use smithay::{
-    backend::input::{ButtonState, KeyState},
-    input::{
-        keyboard::Keycode,
-        pointer::{ButtonEvent, MotionEvent},
-    },
-    utils::{Point, SERIAL_COUNTER},
+    backend::input::KeyState,
+    input::keyboard::Keycode,
 };
 
 use crate::state::Loom;
@@ -21,6 +17,10 @@ pub enum Action {
     /// `<W-x>`: x with Super held (Super = 125)
     Chord { held: u32, code: u32 },
     Click(f64, f64),
+    /// `--sdrag X,Y,X2,Y2[,BUTTON]`: a Super+drag (a mouse bind), button 272 left / 273 right
+    SuperDrag { from: (f64, f64), to: (f64, f64), button: u32 },
+    /// `--sscroll X,Y,up|down`: Super+scroll there
+    SuperScroll { at: (f64, f64), down: bool },
 }
 
 /// A US-layout key for a character: (evdev code, shifted).
@@ -111,22 +111,27 @@ impl Loom {
                 self.key_input(Keycode::new(held + 8), KeyState::Released, time);
             }
             Action::Click(x, y) => {
-                let at: Point<f64, _> = (x, y).into();
-                let under = self.space.element_under(at).map(|(w, loc)| (w.clone(), loc));
-                let pointer = self.seat.get_pointer().expect("pointer");
-                // layers too (the shell's bar, launcher), not only windows
-                let focus = self.surface_at(at);
-                self.pointer_at = at;
-                self.grab_press(at);
-                pointer.motion(self, focus, &MotionEvent { location: at, serial: SERIAL_COUNTER.next_serial(), time });
-                for st in [ButtonState::Pressed, ButtonState::Released] {
-                    pointer.button(self, &ButtonEvent { button: 0x110, state: st, serial: SERIAL_COUNTER.next_serial(), time });
+                self.pointer_move((x, y).into(), time);
+                self.pointer_button(0x110, true, time);
+                self.pointer_button(0x110, false, time);
+            }
+            Action::SuperDrag { from, to, button } => {
+                // Super held, the button down at `from`, moved there in steps, let go
+                self.key_input(Keycode::new(125 + 8), KeyState::Pressed, time);
+                self.pointer_move(from.into(), time);
+                self.pointer_button(button, true, time);
+                for i in 1..=8 {
+                    let t = i as f64 / 8.0;
+                    self.pointer_move((from.0 + (to.0 - from.0) * t, from.1 + (to.1 - from.1) * t).into(), time);
                 }
-                pointer.frame(self);
-                // the window clicked comes up and has the keyboard
-                if let Some((w, _)) = under {
-                    self.focus_window(&w);
-                }
+                self.pointer_button(button, false, time);
+                self.key_input(Keycode::new(125 + 8), KeyState::Released, time);
+            }
+            Action::SuperScroll { at, down } => {
+                self.key_input(Keycode::new(125 + 8), KeyState::Pressed, time);
+                self.pointer_move(at.into(), time);
+                self.pointer_scroll(smithay::backend::input::AxisSource::Wheel, if down { 15.0 } else { -15.0 }, 0.0, Some((if down { 120.0 } else { -120.0 }, 0.0)), time);
+                self.key_input(Keycode::new(125 + 8), KeyState::Released, time);
             }
         }
     }

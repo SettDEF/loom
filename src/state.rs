@@ -95,6 +95,10 @@ pub struct Loom {
     pub loop_handle: Option<smithay::reexports::calloop::LoopHandle<'static, Loom>>,
     /// the special workspace (Super+S) shown over the active one
     pub special_shown: bool,
+    /// a window dragged by a mouse bind; the last scroll bind's time; `exec [workspace N] …` rules by pid
+    pub drag: Option<crate::pointer::Drag>,
+    pub last_scroll_bind: u32,
+    pub exec_rules: Vec<(u32, i32, bool)>,
     /// frame pacing (event driven, no ticking timer): the last frame drawn, a wake-up for the next one armed
     pub last_frame: Instant,
     pub frame_wake_armed: bool,
@@ -154,6 +158,9 @@ impl Loom {
             repeat_gen: 0,
             loop_handle: None,
             special_shown: false,
+            drag: None,
+            last_scroll_bind: 0,
+            exec_rules: Vec::new(),
             last_frame: Instant::now(),
             frame_wake_armed: false,
             socket_name: None,

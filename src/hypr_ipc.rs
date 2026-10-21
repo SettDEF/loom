@@ -147,6 +147,17 @@ impl Loom {
 
     /// `dispatch NAME ARG`: the dispatchers the shell and scripts use.
     pub fn hypr_dispatch(&mut self, arg: &str) -> String {
+        // Hyprland 0.56's Lua form (the shell's HyprDispatch.qml): read, carried out as classic dispatches
+        if arg.trim_start().starts_with("hl.dsp.") {
+            let Some(steps) = crate::hypr_lua::translate(arg) else { return format!("Invalid dispatcher {arg}") };
+            for s in steps {
+                let r = self.hypr_dispatch(&s);
+                if r != "ok" {
+                    return r;
+                }
+            }
+            return "ok".into();
+        }
         let (d, a) = arg.split_once(' ').map(|(x, y)| (x, y.trim())).unwrap_or((arg, ""));
         let ws_of = |s: &Loom, a: &str| -> Option<i32> {
             let a = a.trim();
@@ -175,7 +186,25 @@ impl Loom {
                 }
                 None => return format!("invalid workspace {a}"),
             },
-            "exec" => self.spawn(a),
+            "exec" => {
+                // `[workspace N silent] CMD`: its first window goes there
+                if let Some(rest) = a.strip_prefix('[') {
+                    let (rule, cmd) = rest.split_once(']').unwrap_or((rest, ""));
+                    let mut w = rule.split_whitespace();
+                    if w.next() == Some("workspace") {
+                        if let Some(n) = w.next().and_then(|n| n.parse::<i32>().ok()) {
+                            let silent = w.next() == Some("silent");
+                            if let Some(pid) = self.spawn(cmd.trim()) {
+                                self.exec_rules.push((pid, n, silent));
+                            }
+                        }
+                    } else {
+                        self.spawn(cmd.trim());
+                    }
+                } else {
+                    self.spawn(a);
+                }
+            }
             "killactive" => {
                 if let Some(w) = self.focused.clone() {
                     match (w.toplevel(), w.x11_surface()) {
@@ -195,11 +224,33 @@ impl Loom {
                     self.relayout();
                 }
             }
-            "focuswindow" => {
-                let want = a.trim_start_matches("address:").trim_start_matches("0x");
-                if let Some(m) = self.managed.iter().find(|m| format!("{:x}", m.addr) == want).cloned() {
+            "focuswindow" => match self.find_window(a) {
+                Some(m) => {
                     self.switch_workspace(m.ws);
                     self.focus_window(&m.window);
+                }
+                None => return format!("No such window found: {a}"),
+            },
+            "movewindowpixel" => {
+                // `exact X Y`: a floating window to that place
+                let p: Vec<i32> = a.split_whitespace().filter_map(|v| v.parse().ok()).collect();
+                if let (Some(w), [x, y]) = (self.focused.clone(), p.as_slice()) {
+                    if self.managed_of(&w).is_some_and(|m| m.floating) {
+                        self.space.map_element(w.clone(), (*x, *y), true);
+                        if let Some(xs) = w.x11_surface() {
+                            let _ = xs.configure(smithay::utils::Rectangle::new((*x, *y).into(), xs.geometry().size));
+                        }
+                        self.dirty = true;
+                    }
+                }
+            }
+            "movecursor" => {
+                let p: Vec<f64> = a.split_whitespace().filter_map(|v| v.parse().ok()).collect();
+                if let [x, y] = p.as_slice() {
+                    let size = self.output.as_ref().and_then(|o| o.current_mode()).map(|m| m.size).unwrap_or_default();
+                    let at = (x.clamp(0.0, size.w as f64 - 1.0), y.clamp(0.0, size.h as f64 - 1.0));
+                    let t = self.now_ms();
+                    self.pointer_move(at.into(), t);
                 }
             }
             // the AwesomeWM layouts' messages (suit, next, mwfact, nmaster, ncol, swapmaster, reset)
@@ -246,7 +297,7 @@ impl Loom {
     }
 
     /// A program started in loom: its display and Hyprland signature are loom's.
-    pub fn spawn(&self, cmd: &str) {
+    pub fn spawn(&self, cmd: &str) -> Option<u32> {
         let mut c = std::process::Command::new("sh");
         c.arg("-c").arg(cmd).env_remove("DISPLAY");
         if let Some(name) = &self.socket_name {
@@ -258,7 +309,7 @@ impl Loom {
         if let Some(n) = self.x_display {
             c.env("DISPLAY", format!(":{n}"));
         }
-        let _ = c.spawn();
+        c.spawn().ok().map(|ch| ch.id())
     }
 
     fn hypr_monitors(&self) -> Value {

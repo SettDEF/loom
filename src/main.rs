@@ -5,6 +5,7 @@
 mod anim;
 mod headless;
 mod hypr_ipc;
+mod hypr_lua;
 mod hypr_proto;
 mod binds;
 mod capture;
@@ -13,6 +14,7 @@ mod gpu;
 mod foreign;
 mod input;
 mod layouts;
+mod pointer;
 mod nested;
 mod render;
 mod state;
@@ -52,6 +54,21 @@ fn main() {
                 let v = args.next().unwrap_or_default();
                 if let Some((x, y)) = v.split_once(',').and_then(|(x, y)| Some((x.parse().ok()?, y.parse().ok()?))) {
                     opts.script.push(input::Action::Click(x, y));
+                }
+            }
+            "--sdrag" => {
+                let v: Vec<f64> = args.next().unwrap_or_default().split(',').filter_map(|x| x.trim().parse().ok()).collect();
+                if v.len() >= 4 {
+                    opts.script.push(input::Action::SuperDrag { from: (v[0], v[1]), to: (v[2], v[3]), button: v.get(4).map(|b| *b as u32).unwrap_or(272) });
+                }
+            }
+            "--sscroll" => {
+                let s = args.next().unwrap_or_default();
+                let p: Vec<&str> = s.split(',').collect();
+                if let [x, y, d] = p.as_slice() {
+                    if let (Ok(x), Ok(y)) = (x.parse(), y.parse()) {
+                        opts.script.push(input::Action::SuperScroll { at: (x, y), down: *d == "down" });
+                    }
                 }
             }
             "--input-at" => opts.script_at = Duration::from_millis(args.next().and_then(|v| v.parse().ok()).unwrap_or(1200)),
