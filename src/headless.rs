@@ -7,11 +7,9 @@ use std::{path::PathBuf, process::Command, time::Duration};
 use smithay::{
     backend::renderer::{
         damage::OutputDamageTracker,
-        element::surface::WaylandSurfaceRenderElement,
         pixman::PixmanRenderer,
         Bind,
     },
-    desktop::space::render_output,
     output::{Mode, Output, PhysicalProperties, Scale, Subpixel},
     reexports::{
         calloop::{
@@ -37,6 +35,8 @@ pub struct Options {
     /// scripted input (--keys, --click), one step every 25 ms from `script_at`
     pub script: Vec<crate::input::Action>,
     pub script_at: Duration,
+    /// every frame drawn saved here as a PNG (animations as pictures; at most 400)
+    pub record: Option<PathBuf>,
 }
 
 pub fn run(opts: Options) -> Result<(), Box<dyn std::error::Error>> {
@@ -76,19 +76,35 @@ pub fn run(opts: Options) -> Result<(), Box<dyn std::error::Error>> {
 
     // a frame every 16 ms: draw, then tell the windows they were shown
     event_loop.handle().insert_source(Timer::from_duration(Duration::from_millis(16)), move |_, _, state: &mut Loom| {
-        if let Ok(mut fb) = renderer.bind(&mut image) {
-            let _ = render_output::<_, WaylandSurfaceRenderElement<PixmanRenderer>, _, _>(&output, &mut renderer, &mut fb, 1.0, 0, [&state.space], &[], &mut damage, [0.08, 0.08, 0.1, 1.0]);
-        }
-        let now = state.now_ms();
-        for w in state.space.elements() {
-            w.send_frame(&output, Duration::from_millis(now as u64), Some(Duration::ZERO), |_, _| Some(output.clone()));
+        // only when something changed or an animation runs: an idle desktop draws nothing
+        let snap_due = opts.snapshot.is_some() && state.start.elapsed() >= opts.wait;
+        if state.dirty || state.animating() || snap_due {
+            state.dirty = false;
+            let elements = crate::render::elements(state, &mut renderer, &output, std::time::Instant::now());
+            if let Ok(mut fb) = renderer.bind(&mut image) {
+                let _ = damage.render_output(&mut renderer, &mut fb, 0, &elements, [0.08, 0.08, 0.1, 1.0]);
+            }
+            state.frames += 1;
+            if let Some(dir) = &opts.record {
+                if state.frames <= 400 {
+                    let _ = save_png(&image, &dir.join(format!("frame-{:04}-{:06}ms.png", state.frames, state.start.elapsed().as_millis())));
+                }
+            }
+            let now = state.now_ms();
+            for w in state.space.elements() {
+                w.send_frame(&output, Duration::from_millis(now as u64), Some(Duration::ZERO), |_, _| Some(output.clone()));
+            }
+            let map = smithay::desktop::layer_map_for_output(&output);
+            for l in map.layers() {
+                l.send_frame(&output, Duration::from_millis(now as u64), Some(Duration::ZERO), |_, _| Some(output.clone()));
+            }
         }
         state.space.refresh();
         state.popups.cleanup();
         let _ = state.dh.flush_clients();
         if let (Some(path), true) = (&opts.snapshot, state.start.elapsed() >= opts.wait) {
             match save_png(&image, path) {
-                Ok(()) => eprintln!("loom: wrote {}", path.display()),
+                Ok(()) => eprintln!("loom: wrote {} ({} frames drawn in {:.1} s)", path.display(), state.frames, state.start.elapsed().as_secs_f64()),
                 Err(e) => eprintln!("loom: {e}"),
             }
             state.signal.stop();

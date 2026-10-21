@@ -15,8 +15,8 @@ The milestones of [PLAN.md](PLAN.md), each step a line; ticked when it works wit
 ## 1. Windows
 
 - [x] wlr-layer-shell first (docks, the shell's bar, panels; exclusive zones keep windows clear: a Quickshell bar and dock with a window between)
-- [ ] animations: windows open, close, move, resize; workspaces slide (bezier curves)
-- [ ] frames only on damage (no 60 Hz loop while nothing changes)
+- [~] animations: windows open (fade + grow, from their first frame) and move (glide) with Hyprland's bezier curves; close, resize, workspaces next
+- [x] frames only on damage (no 60 Hz loop while nothing changes: 35 frames in 6 s, all of them animation or content)
 - [ ] dwindle tiling and floating, as Hyprland's defaults
 - [ ] workspaces 1–10, keybinds from a config file
 - [ ] xdg-decoration (server side), borders, gaps

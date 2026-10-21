@@ -33,6 +33,7 @@ use smithay::{
 
 use smithay::backend::renderer::utils::on_commit_buffer_handler;
 use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
+use smithay::reexports::wayland_server::Resource;
 
 pub struct Loom {
     pub dh: DisplayHandle,
@@ -49,6 +50,12 @@ pub struct Loom {
     pub seat: Seat<Loom>,
     /// the windows and where they are
     pub space: Space<Window>,
+    /// each window's animation (place, fade, scale), by its surface
+    pub anims: std::collections::HashMap<smithay::reexports::wayland_server::backend::ObjectId, crate::anim::WindowAnim>,
+    /// something changed since the last frame (a commit, a move): draw again
+    pub dirty: bool,
+    /// frames drawn so far (a test checks an idle desktop draws none)
+    pub frames: u64,
     /// menus and other popups, with the window they belong to
     pub popups: PopupManager,
     /// the one output while there is one (headless, nested)
@@ -72,6 +79,9 @@ impl Loom {
             seat,
             space: Space::default(),
             popups: PopupManager::default(),
+            anims: Default::default(),
+            dirty: true,
+            frames: 0,
             output: None,
             start: Instant::now(),
             signal,
@@ -99,8 +109,30 @@ impl Loom {
                     t.send_pending_configure();
                 }
             }
+            // the window glides there (a new one fades and grows in where it lands)
+            if let Some(id) = win.toplevel().map(|t| t.wl_surface().id()) {
+                let now = std::time::Instant::now();
+                match self.anims.get_mut(&id) {
+                    Some(a) => a.moving_to(rect.loc.x as f64, rect.loc.y as f64, now),
+                    None => {
+                        self.anims.insert(id, crate::anim::WindowAnim::opening(rect.loc.x as f64, rect.loc.y as f64));
+                    }
+                }
+            }
             self.space.map_element(win, rect.loc, false);
         }
+        self.dirty = true;
+    }
+
+    /// A window's animation, if it has one.
+    pub fn anim_of(&self, w: &Window) -> Option<&crate::anim::WindowAnim> {
+        w.toplevel().and_then(|t| self.anims.get(&t.wl_surface().id()))
+    }
+
+    /// Any animation still running (the next frame must be drawn).
+    pub fn animating(&self) -> bool {
+        let now = std::time::Instant::now();
+        self.anims.values().any(|a| !a.done(now))
     }
 
     /// This window has the keyboard and shows as active (xdg activated); the others not.
@@ -142,6 +174,7 @@ impl CompositorHandler for Loom {
     }
     fn commit(&mut self, surface: &WlSurface) {
         on_commit_buffer_handler::<Self>(surface);
+        self.dirty = true;
         self.popups.commit(surface);
         // a layer surface (bar, dock, panel): arranged on its output, its first configure sent
         if let Some(output) = self.output.clone() {
@@ -174,6 +207,13 @@ impl CompositorHandler for Loom {
         }
         if let Some(window) = self.space.elements().find(|w| w.toplevel().is_some_and(|t| t.wl_surface() == &root)).cloned() {
             window.on_commit();
+            // its first frame with something to show: the opening animation starts now
+            let has_buffer = smithay::backend::renderer::utils::with_renderer_surface_state(&root, |s| s.buffer().is_some()).unwrap_or(false);
+            if has_buffer {
+                if let Some(a) = self.anims.get_mut(&root.id()) {
+                    a.shown(std::time::Instant::now());
+                }
+            }
             // the first commit: the window learns its size
             if let Some(t) = window.toplevel() {
                 if !t.is_initial_configure_sent() {
@@ -201,6 +241,7 @@ impl XdgShellHandler for Loom {
         if let Some(w) = gone {
             self.space.unmap_elem(&w);
         }
+        self.anims.remove(&surface.wl_surface().id());
         self.relayout();
     }
     fn new_popup(&mut self, surface: PopupSurface, positioner: PositionerState) {
