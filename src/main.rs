@@ -18,6 +18,7 @@ mod pointer;
 mod nested;
 mod render;
 mod state;
+mod tty;
 mod wm;
 mod xwayland;
 
@@ -28,10 +29,14 @@ fn main() {
     let mut opts = headless::Options { size: (1280, 720), snapshot: None, wait: Duration::from_millis(2000), socket: None, run: Vec::new(), script: Vec::new(), script_at: Duration::from_millis(1200), record: None, binds: None, gpu: false, scale: 1.0 };
     let mut headless = false;
     let mut nested = false;
+    let mut tty = false;
+    let mut for_minutes: Option<u64> = None;
     while let Some(a) = args.next() {
         match a.as_str() {
             "--headless" => headless = true,
             "--nested" => nested = true,
+            "--tty" => tty = true,
+            "--for" => for_minutes = args.next().and_then(|v| v.parse().ok()),
             "--size" => {
                 let v = args.next().unwrap_or_default();
                 if let Some((w, h)) = v.split_once('x').and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?))) {
@@ -85,6 +90,13 @@ fn main() {
                 std::process::exit(2);
             }
         }
+    }
+    if tty {
+        if let Err(e) = tty::run(tty::Options { socket: opts.socket, run: opts.run, for_minutes }) {
+            eprintln!("loom: {e}");
+            std::process::exit(1);
+        }
+        return;
     }
     if nested {
         if let Err(e) = nested::run(opts.socket, opts.run) {

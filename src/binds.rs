@@ -328,6 +328,21 @@ impl crate::state::Loom {
         let kb = self.seat.get_keyboard().expect("keyboard");
         kb.input::<(), _>(self, code, st, smithay::utils::SERIAL_COUNTER.next_serial(), time, |data, mods, h| {
             let sym = h.raw_latin_sym_or_raw_current_sym().map_or(0, |s| s.raw());
+            // on the real screen, before any bind: Ctrl+Alt+F<n> switches the console, Ctrl+Alt+Backspace quits
+            if pressed && data.tty.is_some() {
+                let m = h.modified_sym().raw();
+                if (keysyms::KEY_XF86Switch_VT_1..=keysyms::KEY_XF86Switch_VT_12).contains(&m) {
+                    if let Some(t) = data.tty.as_mut() {
+                        t.vt_switch = Some((m - keysyms::KEY_XF86Switch_VT_1 + 1) as i32);
+                    }
+                    return smithay::input::keyboard::FilterResult::Intercept(());
+                }
+                if mods.ctrl && mods.alt && sym == keysyms::KEY_BackSpace {
+                    eprintln!("loom: Ctrl+Alt+Backspace, quitting");
+                    data.signal.stop();
+                    return smithay::input::keyboard::FilterResult::Intercept(());
+                }
+            }
             let (acts, consume) = data.binds.key(h.raw_code().raw(), sym, mask(mods), pressed, false);
             if let Some(a) = acts {
                 if data.binds.last_repeat {

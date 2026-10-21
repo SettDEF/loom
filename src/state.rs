@@ -99,6 +99,10 @@ pub struct Loom {
     pub drag: Option<crate::pointer::Drag>,
     pub last_scroll_bind: u32,
     pub exec_rules: Vec<(u32, i32, bool)>,
+    /// the real screen (tty.rs); the cursor the pointer's program asks for; frame callbacks owed
+    pub tty: Option<crate::tty::Tty>,
+    pub cursor_status: smithay::input::pointer::CursorImageStatus,
+    pub frames_owed: bool,
     /// frame pacing (event driven, no ticking timer): the last frame drawn, a wake-up for the next one armed
     pub last_frame: Instant,
     pub frame_wake_armed: bool,
@@ -161,6 +165,9 @@ impl Loom {
             drag: None,
             last_scroll_bind: 0,
             exec_rules: Vec::new(),
+            tty: None,
+            cursor_status: smithay::input::pointer::CursorImageStatus::default_named(),
+            frames_owed: false,
             last_frame: Instant::now(),
             frame_wake_armed: false,
             socket_name: None,
@@ -391,6 +398,10 @@ impl SeatHandler for Loom {
     fn seat_state(&mut self) -> &mut SeatState<Self> {
         &mut self.seat_state
     }
+    fn cursor_image(&mut self, _seat: &Seat<Self>, image: smithay::input::pointer::CursorImageStatus) {
+        self.cursor_status = image;
+        self.dirty = true;
+    }
 }
 
 impl SelectionHandler for Loom {
@@ -453,7 +464,9 @@ impl Loom {
         if self.captures_ready() && !self.frame_wake_armed {
             self.wake_in(std::time::Duration::ZERO);
         }
-        if (self.dirty || self.animating()) && !self.frame_wake_armed {
+        // on the real screen the vblank (or the session coming back) wakes the next frame: no timer
+        let tty_waits = self.tty.as_ref().is_some_and(|t| t.pending || !t.active);
+        if (self.dirty || self.animating()) && !self.frame_wake_armed && !tty_waits {
             let left = FRAME.saturating_sub(self.last_frame.elapsed());
             self.frame_wake_armed = true;
             if let Some(h) = &self.loop_handle {

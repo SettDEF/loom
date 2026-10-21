@@ -60,7 +60,7 @@ The milestones of [PLAN.md](PLAN.md), each step a line; ticked when it works wit
 
 ## 4. Real hardware
 
-- [ ] udev / DRM / KMS output, libseat session, libinput
+- [~] udev / DRM / KMS output (DrmCompositor: vblank-paced, damage-only, planes for direct scanout and the cursor), libseat session (console switching), libinput (tap to click); mode, refresh and scale from the user's `monitor=` lines matched by name or EDID name (`desc:`); theme cursor or the program's; Ctrl+Alt+Backspace always quits, --for MINUTES; scripts/try-tty.sh (shell sandboxed: Hyprland still runs) — built, not yet run on the screen
 - [ ] multi-monitor, hotplug, VRR, DPMS
 - [ ] 10-bit / HDR where the panel has it; the Z13 backlight cap (98%)
 
