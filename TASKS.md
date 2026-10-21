@@ -17,16 +17,16 @@ The milestones of [PLAN.md](PLAN.md), each step a line; ticked when it works wit
 - [x] wlr-layer-shell first (docks, the shell's bar, panels; exclusive zones keep windows clear: a Quickshell bar and dock with a window between)
 - [~] animations: windows open (fade + grow, from their first frame) and move (glide) with Hyprland's bezier curves; close, resize, workspaces next
 - [x] frames only on damage (no 60 Hz loop while nothing changes: 35 frames in 6 s, all of them animation or content)
-- [ ] dwindle tiling and floating, as Hyprland's defaults
-- [ ] workspaces 1–10, keybinds from a config file
+- [x] dwindle tiling and floating, as Hyprland's defaults (gaps 5 / 10)
+- [~] workspaces (any number, switched and moved to over IPC); keybinds from a config file next
 - [ ] xdg-decoration (server side), borders, gaps
 - [ ] fractional scale, viewporter, cursor shape, primary selection, xdg-activation
 
 ## 2. Hyprland compatibility
 
-- [ ] IPC request socket: monitors, workspaces, clients, activewindow, devices, getoption (`hyprctl -j monitors` answers)
-- [ ] dispatch and keyword (`hyprctl dispatch workspace 2`)
-- [ ] IPC event socket (socket2): workspace, activewindow, openwindow, closewindow, monitoradded …
+- [x] IPC request socket: monitors, workspaces, activeworkspace, clients, activewindow, devices, version, getoption, [[BATCH]] (`hyprctl -j clients` answers in loom)
+- [x] dispatch (workspace, movetoworkspace(silent), exec, killactive, togglefloating, focuswindow, exit) and keyword (`hyprctl dispatch workspace 2`)
+- [~] IPC event socket (socket2): openwindow, closewindow, activewindow(v2), workspacev2, create/destroyworkspacev2, movewindowv2; windowtitlev2, monitoraddedv2 next
 - [ ] hyprland-global-shortcuts-v1 (the shell's 127 GlobalShortcuts)
 - [ ] hyprland-focus-grab-v1 (launcher, sidebars)
 - [ ] hyprland-toplevel-export-v1, hyprland-toplevel-mapping-v1 (window previews)

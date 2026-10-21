@@ -16,7 +16,7 @@ use smithay::{
             Client, DisplayHandle,
         },
     },
-    utils::{Rectangle, Serial},
+    utils::Serial,
     wayland::{
         buffer::BufferHandler,
         compositor::{get_parent, is_sync_subsurface, with_states, CompositorClientState, CompositorHandler, CompositorState},
@@ -64,6 +64,15 @@ pub struct Loom {
     pub popups: PopupManager,
     /// the one output while there is one (headless, nested)
     pub output: Option<Output>,
+    /// every window with its workspace and address (wm.rs); the workspace shown; the focused one
+    pub managed: Vec<crate::wm::Managed>,
+    pub next_addr: u64,
+    pub active_ws: i32,
+    pub focused: Option<Window>,
+    /// Hyprland's IPC (hypr_ipc.rs): the event socket's listeners
+    pub hypr: Option<crate::hypr_ipc::HyprIpc>,
+    /// the Wayland socket programs connect to (WAYLAND_DISPLAY for what loom starts)
+    pub socket_name: Option<String>,
 }
 
 impl Loom {
@@ -89,45 +98,16 @@ impl Loom {
             nested: None,
             pointer_at: (0.0, 0.0).into(),
             output: None,
+            managed: Vec::new(),
+            next_addr: 0,
+            active_ws: 1,
+            focused: None,
+            hypr: None,
+            socket_name: None,
             start: Instant::now(),
             signal,
             dh,
         }
-    }
-
-    /// The windows side by side across the output (milestone 1 brings dwindle tiling).
-    pub fn relayout(&mut self) {
-        let Some(output) = self.output.clone() else { return };
-        let Some(geo) = self.space.output_geometry(&output) else { return };
-        // what the layers (bar, dock) leave free
-        let mut area = layer_map_for_output(&output).non_exclusive_zone();
-        area.loc += geo.loc;
-        let windows: Vec<Window> = self.space.elements().cloned().collect();
-        let n = windows.len().max(1) as i32;
-        let gap = 8;
-        let w = (area.size.w - gap * (n + 1)) / n;
-        for (i, win) in windows.into_iter().enumerate() {
-            let x = area.loc.x + gap + i as i32 * (w + gap);
-            let rect = Rectangle::new((x, area.loc.y + gap).into(), (w, area.size.h - 2 * gap).into());
-            if let Some(t) = win.toplevel() {
-                t.with_pending_state(|s| s.size = Some(rect.size));
-                if t.is_initial_configure_sent() {
-                    t.send_pending_configure();
-                }
-            }
-            // the window glides there (a new one fades and grows in where it lands)
-            if let Some(id) = win.toplevel().map(|t| t.wl_surface().id()) {
-                let now = std::time::Instant::now();
-                match self.anims.get_mut(&id) {
-                    Some(a) => a.moving_to(rect.loc.x as f64, rect.loc.y as f64, now),
-                    None => {
-                        self.anims.insert(id, crate::anim::WindowAnim::opening(rect.loc.x as f64, rect.loc.y as f64));
-                    }
-                }
-            }
-            self.space.map_element(win, rect.loc, false);
-        }
-        self.dirty = true;
     }
 
     /// The surface under a point, and where it is: the layers above windows, the windows, the
@@ -163,6 +143,12 @@ impl Loom {
 
     /// This window has the keyboard and shows as active (xdg activated); the others not.
     pub fn focus_window(&mut self, window: &Window) {
+        if self.focused.as_ref() != Some(window) {
+            self.focused = Some(window.clone());
+            let addr = self.managed_of(window).map(|m| m.addr).unwrap_or(0);
+            self.hypr_event(&format!("activewindow>>{},{}", self.class_of(window), self.title_of(window)));
+            self.hypr_event(&format!("activewindowv2>>{addr:x}"));
+        }
         self.space.raise_element(window, true);
         for w in self.space.elements() {
             let Some(t) = w.toplevel() else { continue };
@@ -255,20 +241,13 @@ impl XdgShellHandler for Loom {
         &mut self.xdg_shell_state
     }
     fn new_toplevel(&mut self, surface: ToplevelSurface) {
-        let window = Window::new_wayland_window(surface.clone());
-        self.space.map_element(window.clone(), (0, 0), true);
-        self.relayout();
-        // the newest window has the keyboard
-        let _ = surface;
-        self.focus_window(&window);
+        self.manage(Window::new_wayland_window(surface));
     }
     fn toplevel_destroyed(&mut self, surface: ToplevelSurface) {
-        let gone = self.space.elements().find(|w| w.toplevel() == Some(&surface)).cloned();
+        let gone = self.managed.iter().find(|m| m.window.toplevel() == Some(&surface)).map(|m| m.window.clone());
         if let Some(w) = gone {
-            self.space.unmap_elem(&w);
+            self.unmanage(&w);
         }
-        self.anims.remove(&surface.wl_surface().id());
-        self.relayout();
     }
     fn new_popup(&mut self, surface: PopupSurface, positioner: PositionerState) {
         surface.with_pending_state(|s| s.geometry = positioner.get_geometry());

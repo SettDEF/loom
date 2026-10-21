@@ -80,6 +80,8 @@ pub fn run(socket: Option<String>, run: Vec<String>) -> Result<(), Box<dyn std::
         None => ListeningSocketSource::new_auto()?,
     };
     let socket_name = socket.socket_name().to_string_lossy().to_string();
+    state.socket_name = Some(socket_name.clone());
+    state.hypr = Some(crate::hypr_ipc::start(&event_loop.handle())?);
     event_loop.handle().insert_source(socket, |stream, _, state: &mut Loom| {
         let _ = state.dh.insert_client(stream, client_data());
     })?;
@@ -140,7 +142,10 @@ pub fn run(socket: Option<String>, run: Vec<String>) -> Result<(), Box<dyn std::
 
     if !run.is_empty() {
         let mut cmd = Command::new(&run[0]);
-        cmd.args(&run[1..]).env("WAYLAND_DISPLAY", &socket_name).env_remove("DISPLAY").env_remove("HYPRLAND_INSTANCE_SIGNATURE");
+        cmd.args(&run[1..]).env("WAYLAND_DISPLAY", &socket_name).env_remove("DISPLAY");
+        if let Some(h) = &state.hypr {
+            cmd.env("HYPRLAND_INSTANCE_SIGNATURE", &h.signature);
+        }
         cmd.spawn()?;
     }
     event_loop.run(None, &mut state, |_| {})?;

@@ -4,10 +4,12 @@
 
 mod anim;
 mod headless;
+mod hypr_ipc;
 mod input;
 mod nested;
 mod render;
 mod state;
+mod wm;
 
 use std::{path::PathBuf, time::Duration};
 
