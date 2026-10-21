@@ -433,3 +433,8 @@ optional = true
 [profile.release-with-debug]
 debug = 2
 inherits = "release"
+
+[lints.rust]
+unused_imports = "allow"
+deprecated = "allow"
+function_casts_as_integer = "allow"

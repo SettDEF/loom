@@ -6,12 +6,14 @@ mod anim;
 mod headless;
 mod hypr_ipc;
 mod hypr_proto;
+mod focus;
 mod input;
 mod layouts;
 mod nested;
 mod render;
 mod state;
 mod wm;
+mod xwayland;
 
 use std::{path::PathBuf, time::Duration};
 

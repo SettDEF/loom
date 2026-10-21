@@ -52,6 +52,11 @@ pub fn run(opts: Options) -> Result<(), Box<dyn std::error::Error>> {
     let socket_name = socket.socket_name().to_string_lossy().to_string();
     state.socket_name = Some(socket_name.clone());
     state.hypr = Some(crate::hypr_ipc::start(&event_loop.handle())?);
+    // X programs: Xwayland, started now (on demand later)
+    match crate::xwayland::start(&event_loop.handle(), &mut state) {
+        Ok(n) => state.x_display = Some(n),
+        Err(e) => eprintln!("loom: no Xwayland: {e}"),
+    }
     event_loop.handle().insert_source(socket, |stream, _, state: &mut Loom| {
         let _ = state.dh.insert_client(stream, client_data());
     })?;
@@ -132,6 +137,9 @@ pub fn run(opts: Options) -> Result<(), Box<dyn std::error::Error>> {
         cmd.args(&opts.run[1..]).env("WAYLAND_DISPLAY", &socket_name).env_remove("DISPLAY");
         if let Some(h) = &state.hypr {
             cmd.env("HYPRLAND_INSTANCE_SIGNATURE", &h.signature);
+        }
+        if let Some(n) = state.x_display {
+            cmd.env("DISPLAY", format!(":{n}"));
         }
         cmd.spawn()?;
     }

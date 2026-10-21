@@ -28,11 +28,26 @@ const GAPS_OUT: i32 = 10;
 impl Loom {
     /// A new window: on the active workspace, tiled, focused.
     pub fn manage(&mut self, window: Window) {
+        self.manage_at(window, None);
+    }
+
+    /// A new floating window, at `loc` (an X dialog).
+    pub fn manage_floating(&mut self, window: Window, loc: smithay::utils::Point<i32, Logical>) {
+        self.manage_at(window, Some(loc));
+    }
+
+    fn manage_at(&mut self, window: Window, float_at: Option<smithay::utils::Point<i32, Logical>>) {
         self.next_addr += 1;
         let addr = 0x5a00_0000 + self.next_addr * 0x100;
-        let pid = window.toplevel().and_then(|t| t.wl_surface().client()).and_then(|c| c.get_credentials(&self.dh).ok()).map(|c| c.pid).unwrap_or(-1);
-        self.managed.push(Managed { window: window.clone(), addr, ws: self.active_ws, pid, floating: false });
-        self.space.map_element(window.clone(), (0, 0), true);
+        let pid = match window.x11_surface() {
+            Some(x) => x.pid().map(|p| p as i32).unwrap_or(-1),
+            None => window.toplevel().and_then(|t| t.wl_surface().client()).and_then(|c| c.get_credentials(&self.dh).ok()).map(|c| c.pid).unwrap_or(-1),
+        };
+        self.managed.push(Managed { window: window.clone(), addr, ws: self.active_ws, pid, floating: float_at.is_some() });
+        self.space.map_element(window.clone(), float_at.unwrap_or_default(), true);
+        if let Some(at) = float_at {
+            self.anims.insert(addr, WindowAnim::opening(at.x as f64, at.y as f64));
+        }
         self.relayout();
         self.focus_window(&window);
         self.hypr_event(&format!("openwindow>>{addr:x},{},{},{}", self.active_ws, self.class_of(&window), self.title_of(&window)));
@@ -43,9 +58,7 @@ impl Loom {
         let Some(i) = self.managed.iter().position(|m| &m.window == window) else { return };
         let m = self.managed.remove(i);
         self.space.unmap_elem(window);
-        if let Some(t) = window.toplevel() {
-            self.anims.remove(&t.wl_surface().id());
-        }
+        self.anims.remove(&m.addr);
         self.hypr_event(&format!("closewindow>>{:x}", m.addr));
         if self.focused.as_ref() == Some(window) {
             self.focused = None;
@@ -65,26 +78,27 @@ impl Loom {
         // gaps as Hyprland's: the edge gets gaps_out, between two windows twice gaps_in
         let inset = GAPS_OUT - GAPS_IN;
         let area = Rectangle::new((area.loc.x + inset, area.loc.y + inset).into(), (area.size.w - 2 * inset, area.size.h - 2 * inset).into());
-        let tiled: Vec<Window> = self.managed.iter().filter(|m| m.ws == self.active_ws && !m.floating).map(|m| m.window.clone()).collect();
+        let tiled: Vec<(Window, u64)> = self.managed.iter().filter(|m| m.ws == self.active_ws && !m.floating).map(|m| (m.window.clone(), m.addr)).collect();
         let suit = self.layouts.of(&self.active_ws.to_string());
         let rects: Vec<Rectangle<i32, Logical>> = crate::layouts::arrange(tiled.len(), area, &suit)
             .into_iter()
             .map(|r| Rectangle::new((r.loc.x + GAPS_IN, r.loc.y + GAPS_IN).into(), ((r.size.w - 2 * GAPS_IN).max(1), (r.size.h - 2 * GAPS_IN).max(1)).into()))
             .collect();
         let now = std::time::Instant::now();
-        for (win, rect) in tiled.into_iter().zip(rects) {
+        for ((win, addr), rect) in tiled.into_iter().zip(rects) {
             if let Some(t) = win.toplevel() {
                 t.with_pending_state(|s| s.size = Some(rect.size));
                 if t.is_initial_configure_sent() {
                     t.send_pending_configure();
                 }
-                // it glides there (a new one fades and grows in where it lands)
-                let id = t.wl_surface().id();
-                match self.anims.get_mut(&id) {
-                    Some(a) => a.moving_to(rect.loc.x as f64, rect.loc.y as f64, now),
-                    None => {
-                        self.anims.insert(id, WindowAnim::opening(rect.loc.x as f64, rect.loc.y as f64));
-                    }
+            } else if let Some(x) = win.x11_surface() {
+                let _ = x.configure(rect);
+            }
+            // it glides there (a new one fades and grows in where it lands)
+            match self.anims.get_mut(&addr) {
+                Some(a) => a.moving_to(rect.loc.x as f64, rect.loc.y as f64, now),
+                None => {
+                    self.anims.insert(addr, WindowAnim::opening(rect.loc.x as f64, rect.loc.y as f64));
                 }
             }
             self.space.map_element(win, rect.loc, false);
@@ -156,9 +170,15 @@ impl Loom {
     }
 
     pub fn class_of(&self, w: &Window) -> String {
+        if let Some(x) = w.x11_surface() {
+            return x.class();
+        }
         w.toplevel().and_then(|t| smithay::wayland::compositor::with_states(t.wl_surface(), |s| s.data_map.get::<smithay::wayland::shell::xdg::XdgToplevelSurfaceData>().and_then(|d| d.lock().ok()?.app_id.clone()))).unwrap_or_default()
     }
     pub fn title_of(&self, w: &Window) -> String {
+        if let Some(x) = w.x11_surface() {
+            return x.title();
+        }
         w.toplevel().and_then(|t| smithay::wayland::compositor::with_states(t.wl_surface(), |s| s.data_map.get::<smithay::wayland::shell::xdg::XdgToplevelSurfaceData>().and_then(|d| d.lock().ok()?.title.clone()))).unwrap_or_default()
     }
     /// windowtitle(v2) for the shell; activewindow again when it is the focused one

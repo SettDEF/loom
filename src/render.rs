@@ -49,7 +49,7 @@ where
         let x = x + sw * (1.0 - scale) / 2.0 - geo.loc.x as f64 * scale;
         let y = y + sh * (1.0 - scale) / 2.0 - geo.loc.y as f64 * scale;
         let loc: Point<i32, Physical> = Point::from((x.round() as i32, y.round() as i32));
-        out.extend(AsRenderElements::<R>::render_elements::<WaylandSurfaceRenderElement<R>>(w, renderer, loc, Scale::from(scale), alpha as f32 * w.toplevel().map_or(1.0, |t| state.opacity_of(t.wl_surface()))));
+        out.extend(AsRenderElements::<R>::render_elements::<WaylandSurfaceRenderElement<R>>(w, renderer, loc, Scale::from(scale), alpha as f32 * smithay::wayland::seat::WaylandFocus::wl_surface(w).map_or(1.0, |s| state.opacity_of(&s))));
     }
     layers(&mut out, renderer, &[Layer::Bottom, Layer::Background]);
     out

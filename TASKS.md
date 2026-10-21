@@ -58,7 +58,8 @@ The milestones of [PLAN.md](PLAN.md), each step a line; ticked when it works wit
 
 ## 5. The rest of a day
 
-- [ ] Xwayland on demand: X11 display + window manager (X windows tiled, in `hyprctl clients` with xwayland: true), menus/tooltips/dialogs placed by window type
+- [x] Xwayland + window manager: X windows tiled in the layouts, on workspaces, in `hyprctl clients` with xwayland: true; dialogs float centred, menus/tooltips where the program puts them; click focus and typing reach X (xterm, xeyes, xmessage tested)
+- [ ] Xwayland started on demand (on the first X connection), not with loom
 - [ ] X clipboard and drag and drop shared with Wayland; HiDPI per app (sharp or scaled)
 - [ ] Steam and games (fullscreen, pointer lock, direct scanout) on the real screen (M4)
 - [ ] loom's own X server (Rust): core protocol + MIT-SHM + XKB + RandR; xterm, xeyes, xclock run without Xwayland

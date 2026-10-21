@@ -33,7 +33,6 @@ use smithay::{
 
 use smithay::backend::renderer::utils::on_commit_buffer_handler;
 use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
-use smithay::reexports::wayland_server::Resource;
 
 pub struct Loom {
     pub dh: DisplayHandle,
@@ -50,8 +49,8 @@ pub struct Loom {
     pub seat: Seat<Loom>,
     /// the windows and where they are
     pub space: Space<Window>,
-    /// each window's animation (place, fade, scale), by its surface
-    pub anims: std::collections::HashMap<smithay::reexports::wayland_server::backend::ObjectId, crate::anim::WindowAnim>,
+    /// each window's animation (place, fade, scale), by its address (wm.rs)
+    pub anims: std::collections::HashMap<u64, crate::anim::WindowAnim>,
     /// something changed since the last frame (a commit, a move): draw again
     pub dirty: bool,
     /// the nested backend's window and renderer (None headless)
@@ -77,6 +76,10 @@ pub struct Loom {
     pub proto: crate::hypr_proto::HyprProto,
     /// the Wayland socket programs connect to (WAYLAND_DISPLAY for what loom starts)
     pub socket_name: Option<String>,
+    /// Xwayland's window manager once it runs, its display (DISPLAY=:N for what loom starts)
+    pub xwm: Option<smithay::xwayland::X11Wm>,
+    pub x_display: Option<u32>,
+    pub xwayland_shell_state: smithay::wayland::xwayland_shell::XWaylandShellState,
 }
 
 impl Loom {
@@ -111,6 +114,9 @@ impl Loom {
             layouts: crate::layouts::Layouts::load(),
             proto: Default::default(),
             socket_name: None,
+            xwm: None,
+            x_display: None,
+            xwayland_shell_state: smithay::wayland::xwayland_shell::XWaylandShellState::new::<Loom>(&dh),
             start: Instant::now(),
             signal,
             dh,
@@ -139,7 +145,7 @@ impl Loom {
 
     /// A window's animation, if it has one.
     pub fn anim_of(&self, w: &Window) -> Option<&crate::anim::WindowAnim> {
-        w.toplevel().and_then(|t| self.anims.get(&t.wl_surface().id()))
+        self.managed_of(w).and_then(|m| self.anims.get(&m.addr))
     }
 
     /// Any animation still running (the next frame must be drawn).
@@ -158,8 +164,12 @@ impl Loom {
         }
         self.space.raise_element(window, true);
         for w in self.space.elements() {
-            let Some(t) = w.toplevel() else { continue };
             let on = w == window;
+            if let Some(x) = w.x11_surface() {
+                let _ = x.set_activated(on);
+                continue;
+            }
+            let Some(t) = w.toplevel() else { continue };
             t.with_pending_state(|s| {
                 if on {
                     s.states.set(xdg_toplevel::State::Activated);
@@ -172,9 +182,19 @@ impl Loom {
                 t.send_pending_configure();
             }
         }
-        if let Some(t) = window.toplevel() {
+        let target = match (window.toplevel(), window.x11_surface()) {
+            (Some(t), _) => Some(crate::focus::KbFocus::Surface(t.wl_surface().clone())),
+            (_, Some(x)) => {
+                if let Some(wm) = self.xwm.as_mut() {
+                    let _ = wm.raise_window(x);
+                }
+                Some(crate::focus::KbFocus::X11(x.clone()))
+            }
+            _ => None,
+        };
+        if let Some(t) = target {
             let kb = self.seat.get_keyboard().expect("keyboard");
-            kb.set_focus(self, Some(t.wl_surface().clone()), Serial::from(0));
+            kb.set_focus(self, Some(t), Serial::from(0));
         }
     }
 
@@ -189,6 +209,9 @@ impl CompositorHandler for Loom {
         &mut self.compositor_state
     }
     fn client_compositor_state<'a>(&self, client: &'a Client) -> &'a CompositorClientState {
+        if let Some(x) = client.get_data::<smithay::xwayland::XWaylandClientData>() {
+            return &x.compositor_state;
+        }
         &client.get_data::<ClientState>().expect("client state").compositor_state
     }
     fn commit(&mut self, surface: &WlSurface) {
@@ -224,12 +247,12 @@ impl CompositorHandler for Loom {
         while let Some(parent) = get_parent(&root) {
             root = parent;
         }
-        if let Some(window) = self.space.elements().find(|w| w.toplevel().is_some_and(|t| t.wl_surface() == &root)).cloned() {
+        if let Some(window) = self.space.elements().find(|w| smithay::wayland::seat::WaylandFocus::wl_surface(*w).is_some_and(|s| *s == root)).cloned() {
             window.on_commit();
             // its first frame with something to show: the opening animation starts now
             let has_buffer = smithay::backend::renderer::utils::with_renderer_surface_state(&root, |s| s.buffer().is_some()).unwrap_or(false);
             if has_buffer {
-                if let Some(a) = self.anims.get_mut(&root.id()) {
+                if let Some(a) = self.managed_of(&window).map(|m| m.addr).and_then(|addr| self.anims.get_mut(&addr)) {
                     a.shown(std::time::Instant::now());
                 }
             }
@@ -307,7 +330,7 @@ impl ShmHandler for Loom {
 }
 
 impl SeatHandler for Loom {
-    type KeyboardFocus = WlSurface;
+    type KeyboardFocus = crate::focus::KbFocus;
     type PointerFocus = WlSurface;
     type TouchFocus = WlSurface;
     fn seat_state(&mut self) -> &mut SeatState<Self> {

@@ -141,8 +141,14 @@ impl Loom {
             },
             "exec" => self.spawn(a),
             "killactive" => {
-                if let Some(t) = self.focused.as_ref().and_then(|w| w.toplevel().cloned()) {
-                    t.send_close();
+                if let Some(w) = self.focused.clone() {
+                    match (w.toplevel(), w.x11_surface()) {
+                        (Some(t), _) => t.send_close(),
+                        (_, Some(x)) => {
+                            let _ = x.close();
+                        }
+                        _ => {}
+                    }
                 }
             }
             "togglefloating" => {
@@ -193,6 +199,9 @@ impl Loom {
         }
         if let Some(h) = &self.hypr {
             c.env("HYPRLAND_INSTANCE_SIGNATURE", &h.signature);
+        }
+        if let Some(n) = self.x_display {
+            c.env("DISPLAY", format!(":{n}"));
         }
         let _ = c.spawn();
     }
@@ -256,7 +265,7 @@ impl Loom {
             "workspace": { "id": m.ws, "name": m.ws.to_string() },
             "floating": m.floating, "pseudo": false, "monitor": 0,
             "class": class, "title": title, "initialClass": class, "initialTitle": title,
-            "pid": m.pid, "xwayland": false, "pinned": false, "fullscreen": 0, "fullscreenClient": 0,
+            "pid": m.pid, "xwayland": m.window.x11_surface().is_some(), "pinned": false, "fullscreen": 0, "fullscreenClient": 0,
             "grouped": [], "tags": [], "swallowing": "0x0",
             "focusHistoryID": if self.focused.as_ref() == Some(&m.window) { 0 } else { 1 },
             "inhibitingIdle": false, "xdgTag": "", "xdgDescription": "", "contentType": "none",

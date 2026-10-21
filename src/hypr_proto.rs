@@ -139,9 +139,9 @@ impl Dispatch<HyprlandFocusGrabV1, ()> for Loom {
                 let first = g.surfaces.first().cloned();
                 // the keyboard goes into the grab, unless it is in it already
                 let kb = state.seat.get_keyboard().expect("keyboard");
-                let inside = kb.current_focus().is_some_and(|f| state.proto.grabs.iter().any(|g| g.surfaces.contains(&f)));
+                let inside = kb.current_focus().and_then(|f| f.surface()).is_some_and(|f| state.proto.grabs.iter().any(|g| g.surfaces.contains(&f)));
                 if let (Some(s), false) = (first, inside) {
-                    kb.set_focus(state, Some(s), smithay::utils::SERIAL_COUNTER.next_serial());
+                    kb.set_focus(state, Some(s.into()), smithay::utils::SERIAL_COUNTER.next_serial());
                 }
             }
             _ => {}
@@ -233,7 +233,7 @@ impl Loom {
         let map = smithay::desktop::layer_map_for_output(output);
         let layer = |which: &[L]| which.iter().find_map(|l| map.layer_under(*l, at).map(|s| s.wl_surface().clone()));
         layer(&[L::Overlay, L::Top])
-            .or_else(|| self.space.element_under(at).and_then(|(w, _)| w.toplevel().map(|t| t.wl_surface().clone())))
+            .or_else(|| self.space.element_under(at).and_then(|(w, _)| w.toplevel().map(|t| t.wl_surface().clone()).or_else(|| w.x11_surface().and_then(|x| x.wl_surface()))))
             .or_else(|| layer(&[L::Bottom, L::Background]))
     }
 
