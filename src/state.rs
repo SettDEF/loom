@@ -76,6 +76,14 @@ pub struct Loom {
     pub proto: crate::hypr_proto::HyprProto,
     /// the docks' window list (foreign.rs)
     pub foreign: crate::foreign::Foreign,
+    /// window copies asked for (capture.rs), drawn on the next frame
+    pub captures: Vec<crate::capture::Capture>,
+    /// commits per window, and the count each client's last copy saw (copies wait for a change)
+    pub commit_count: std::collections::HashMap<u64, u64>,
+    pub captured_at: std::collections::HashMap<(Option<smithay::reexports::wayland_server::backend::ClientId>, u64), u64>,
+    /// linux-dmabuf when a GPU renderer is there; the headless GPU renderer (gpu.rs)
+    pub dmabuf: Option<(smithay::wayland::dmabuf::DmabufState, smithay::wayland::dmabuf::DmabufGlobal)>,
+    pub gpu: Option<crate::gpu::Shared>,
     /// the user's Hyprland binds (binds.rs); the actions a key just matched
     pub binds: crate::binds::Binds,
     pub bind_actions: Vec<String>,
@@ -108,6 +116,7 @@ impl Loom {
         crate::hypr_proto::init(&dh);
         crate::foreign::init(&dh);
         crate::hypr_proto::init_mapping(&dh);
+        crate::capture::init(&dh);
         Loom {
             compositor_state: CompositorState::new::<Loom>(&dh),
             xdg_shell_state: XdgShellState::new::<Loom>(&dh),
@@ -133,6 +142,11 @@ impl Loom {
             layouts: crate::layouts::Layouts::load(),
             proto: Default::default(),
             foreign: Default::default(),
+            captures: Vec::new(),
+            commit_count: Default::default(),
+            captured_at: Default::default(),
+            dmabuf: None,
+            gpu: None,
             binds: Default::default(),
             bind_actions: Vec::new(),
             fullscreen: None,
@@ -280,6 +294,9 @@ impl CompositorHandler for Loom {
         }
         if let Some(window) = self.space.elements().find(|w| smithay::wayland::seat::WaylandFocus::wl_surface(*w).is_some_and(|s| *s == root)).cloned() {
             window.on_commit();
+            if let Some(a) = self.managed_of(&window).map(|m| m.addr) {
+                *self.commit_count.entry(a).or_default() += 1;
+            }
             // its first frame with something to show: the opening animation starts now
             let has_buffer = smithay::backend::renderer::utils::with_renderer_surface_state(&root, |s| s.buffer().is_some()).unwrap_or(false);
             if has_buffer {
@@ -426,6 +443,9 @@ impl Loom {
     /// After each turn of the event loop: a frame waiting for its time gets one wake-up then
     /// (never a ticking timer); what the clients were sent goes out.
     pub fn after_dispatch(&mut self) {
+        if self.captures_ready() && !self.frame_wake_armed {
+            self.wake_in(std::time::Duration::ZERO);
+        }
         if (self.dirty || self.animating()) && !self.frame_wake_armed {
             let left = FRAME.saturating_sub(self.last_frame.elapsed());
             self.frame_wake_armed = true;

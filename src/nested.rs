@@ -6,12 +6,10 @@ use std::{process::Command, time::Duration};
 
 use smithay::{
     backend::{
-        allocator::dmabuf::Dmabuf,
         input::{AbsolutePositionEvent, Axis, AxisSource, ButtonState, Event, InputEvent, KeyboardKeyEvent, PointerAxisEvent, PointerButtonEvent},
-        renderer::{damage::OutputDamageTracker, gles::GlesRenderer, ImportDma},
+        renderer::{damage::OutputDamageTracker, gles::GlesRenderer},
         winit::{self, WinitEvent, WinitGraphicsBackend},
     },
-    delegate_dmabuf,
     input::{
         pointer::{AxisFrame, ButtonEvent, MotionEvent},
     },
@@ -22,7 +20,7 @@ use smithay::{
     },
     utils::{Transform, SERIAL_COUNTER},
     wayland::{
-        dmabuf::{DmabufGlobal, DmabufHandler, DmabufState, ImportNotifier},
+
         socket::ListeningSocketSource,
     },
 };
@@ -32,25 +30,7 @@ use crate::state::{client_data, Loom};
 /// The GL window and its renderer, while loom runs nested.
 pub struct Nested {
     pub backend: WinitGraphicsBackend<GlesRenderer>,
-    pub dmabuf_state: DmabufState,
-    pub _dmabuf_global: DmabufGlobal,
 }
-
-impl DmabufHandler for Loom {
-    fn dmabuf_state(&mut self) -> &mut DmabufState {
-        &mut self.nested.as_mut().expect("nested").dmabuf_state
-    }
-    fn dmabuf_imported(&mut self, _global: &DmabufGlobal, dmabuf: Dmabuf, notifier: ImportNotifier) {
-        // a GPU buffer the client made: the renderer takes it, or the client hears it failed
-        let ok = self.nested.as_mut().is_some_and(|n| n.backend.renderer().import_dmabuf(&dmabuf, None).is_ok());
-        if ok {
-            let _ = notifier.successful::<Loom>();
-        } else {
-            notifier.failed();
-        }
-    }
-}
-delegate_dmabuf!(Loom);
 
 pub fn run(socket: Option<String>, run: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
     let mut event_loop: EventLoop<Loom> = EventLoop::try_new()?;
@@ -60,9 +40,8 @@ pub fn run(socket: Option<String>, run: Vec<String>) -> Result<(), Box<dyn std::
     // the window on the desktop it runs in: named loom (Hyprland's rules and title bars see that)
     let attrs = smithay::reexports::winit::window::WindowAttributes::default().with_title("loom").with_inner_size(smithay::reexports::winit::dpi::LogicalSize::new(1280.0, 800.0));
     let (mut backend, winit_loop) = winit::init_from_attributes::<GlesRenderer>(attrs)?;
-    let formats = backend.renderer().dmabuf_formats();
-    let mut dmabuf_state = DmabufState::new();
-    let dmabuf_global = dmabuf_state.create_global::<Loom>(&state.dh, formats);
+    // GPU buffers from programs, offered with feedback (gpu.rs)
+    crate::gpu::offer(&mut state, backend.renderer());
 
     let size = backend.window_size();
     let output = Output::new("NESTED-1".into(), PhysicalProperties { size: (0, 0).into(), subpixel: Subpixel::Unknown, make: "loom".into(), model: "nested".into() });
@@ -72,7 +51,7 @@ pub fn run(socket: Option<String>, run: Vec<String>) -> Result<(), Box<dyn std::
     output.set_preferred(mode);
     state.space.map_output(&output, (0, 0));
     state.output = Some(output.clone());
-    state.nested = Some(Nested { backend, dmabuf_state, _dmabuf_global: dmabuf_global });
+    state.nested = Some(Nested { backend });
 
     let socket = match &socket {
         Some(name) => ListeningSocketSource::with_name(name)?,
@@ -135,6 +114,8 @@ pub fn run(socket: Option<String>, run: Vec<String>) -> Result<(), Box<dyn std::
                     changed = r.damage.cloned();
                 }
             }
+            // window copies for the shell (previews), drawn offscreen with the same renderer
+            crate::capture::run::<_, smithay::backend::renderer::gles::GlesTexture>(state, nested.backend.renderer());
             if let Some(d) = changed.filter(|d| !d.is_empty()) {
                 let _ = nested.backend.submit(Some(&d));
             }
@@ -151,6 +132,11 @@ pub fn run(socket: Option<String>, run: Vec<String>) -> Result<(), Box<dyn std::
             }
             state.space.refresh();
             state.popups.cleanup();
+        } else if state.captures_ready() {
+            // nothing to show, but a window copy is due: only that is drawn
+            let mut nested = state.nested.take().expect("nested");
+            crate::capture::run::<_, smithay::backend::renderer::gles::GlesTexture>(state, nested.backend.renderer());
+            state.nested = Some(nested);
         }
     };
 

@@ -4,11 +4,12 @@
 
 use std::{path::PathBuf, process::Command, time::Duration};
 
+use std::{cell::RefCell, rc::Rc};
+
 use smithay::{
-    backend::renderer::{
-        damage::OutputDamageTracker,
-        pixman::PixmanRenderer,
-        Bind,
+    backend::{
+        allocator::Fourcc,
+        renderer::{damage::OutputDamageTracker, gles::GlesTexture, pixman::PixmanRenderer, Bind, ExportMem, ImportAll, Offscreen, Renderer, Texture},
     },
     output::{Mode, Output, PhysicalProperties, Scale, Subpixel},
     reexports::{
@@ -39,6 +40,8 @@ pub struct Options {
     pub record: Option<PathBuf>,
     /// a Hyprland config whose binds to use (--binds; none by default headless: the user's binds talk to their running shell)
     pub binds: Option<PathBuf>,
+    /// draw on the GPU (surfaceless) and offer linux-dmabuf, as on a real screen (--gpu)
+    pub gpu: bool,
 }
 
 pub fn run(opts: Options) -> Result<(), Box<dyn std::error::Error>> {
@@ -84,55 +87,26 @@ pub fn run(opts: Options) -> Result<(), Box<dyn std::error::Error>> {
     state.space.map_output(&output, (0, 0));
     state.output = Some(output.clone());
 
-    let mut renderer = PixmanRenderer::new()?;
-    let mut image = Image::new(FormatCode::A8R8G8B8, w as usize, h as usize, true).map_err(|_| "pixman image")?;
-    let mut damage = OutputDamageTracker::from_output(&output);
-
+    let damage = OutputDamageTracker::from_output(&output);
+    let fo = FrameOpts { snapshot: opts.snapshot.clone(), wait: opts.wait, record: opts.record.clone(), size: (w, h) };
     // a frame when something changed or an animation runs (at most one per 16 ms); an idle
     // desktop draws nothing and loom sleeps: no timer ticks (battery)
     if opts.snapshot.is_some() {
         state.wake_in(opts.wait);
     }
-    let mut frame = move |state: &mut Loom| {
-        let snap_due = opts.snapshot.is_some() && state.start.elapsed() >= opts.wait;
-        if !state.frame_due() && !snap_due {
-            return;
-        }
-        state.last_frame = std::time::Instant::now();
-        {
-            state.dirty = false;
-            let elements = crate::render::elements(state, &mut renderer, &output, std::time::Instant::now());
-            if let Ok(mut fb) = renderer.bind(&mut image) {
-                let _ = damage.render_output(&mut renderer, &mut fb, 0, &elements, [0.08, 0.08, 0.1, 1.0]);
-            }
-            state.frames += 1;
-            if let Some(dir) = &opts.record {
-                if state.frames <= 400 {
-                    let _ = save_png(&image, &dir.join(format!("frame-{:04}-{:06}ms.png", state.frames, state.start.elapsed().as_millis())));
-                }
-            }
-            let now = state.now_ms();
-            for w in state.space.elements() {
-                if !state.wants_frame(w) {
-                    continue;
-                }
-                w.send_frame(&output, Duration::from_millis(now as u64), Some(Duration::ZERO), |_, _| Some(output.clone()));
-            }
-            let map = smithay::desktop::layer_map_for_output(&output);
-            for l in map.layers() {
-                l.send_frame(&output, Duration::from_millis(now as u64), Some(Duration::ZERO), |_, _| Some(output.clone()));
-            }
-        }
-        state.space.refresh();
-        state.popups.cleanup();
-        let _ = state.dh.flush_clients();
-        if let (Some(path), true) = (&opts.snapshot, state.start.elapsed() >= opts.wait) {
-            match save_png(&image, path) {
-                Ok(()) => eprintln!("loom: wrote {} ({} frames drawn in {:.1} s)", path.display(), state.frames, state.start.elapsed().as_secs_f64()),
-                Err(e) => eprintln!("loom: {e}"),
-            }
-            state.signal.stop();
-        }
+    let mut frame: Box<dyn FnMut(&mut Loom)> = if opts.gpu {
+        // the GPU, surfaceless: programs may hand GPU buffers (linux-dmabuf), as on a real screen
+        let r = crate::gpu::headless_renderer()?;
+        crate::gpu::offer(&mut state, &r);
+        let shared = Rc::new(RefCell::new(r));
+        state.gpu = Some(shared.clone());
+        let target: GlesTexture = shared.borrow_mut().create_buffer(Fourcc::Abgr8888, (w, h).into())?;
+        eprintln!("loom: headless on the GPU");
+        Box::new(frames(shared, target, output.clone(), damage, fo))
+    } else {
+        let r = Rc::new(RefCell::new(PixmanRenderer::new()?));
+        let target = Image::new(FormatCode::A8R8G8B8, w as usize, h as usize, true).map_err(|_| "pixman image")?;
+        Box::new(frames(r, target, output.clone(), damage, fo))
     };
 
     // the script: one step every 25 ms once its time has come
@@ -167,19 +141,87 @@ pub fn run(opts: Options) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// The pixman image (ARGB8888 in memory as B G R A) as an RGBA PNG.
-fn save_png(image: &Image<'static, 'static>, path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
-    let (w, h, stride) = (image.width(), image.height(), image.stride());
-    let data: &[u8] = unsafe { std::slice::from_raw_parts(image.data() as *const u8, stride * h) };
-    let mut rgba = Vec::with_capacity(w * h * 4);
-    for y in 0..h {
-        for x in 0..w {
-            let p = &data[y * stride + x * 4..y * stride + x * 4 + 4];
-            rgba.extend_from_slice(&[p[2], p[1], p[0], 255]);
+/// What the frame loop needs of the options.
+struct FrameOpts {
+    snapshot: Option<PathBuf>,
+    wait: Duration,
+    record: Option<PathBuf>,
+    size: (i32, i32),
+}
+
+/// The frame loop for a renderer `R` drawing into `target` (pixman image or GPU texture).
+fn frames<R, T>(renderer: Rc<RefCell<R>>, mut target: T, output: Output, mut damage: OutputDamageTracker, fo: FrameOpts) -> impl FnMut(&mut Loom)
+where
+    R: Renderer + ImportAll + Bind<T> + Offscreen<T> + ExportMem + 'static,
+    R::TextureId: Texture + Clone + 'static,
+    T: 'static,
+{
+    move |state: &mut Loom| {
+        let snap_due = fo.snapshot.is_some() && state.start.elapsed() >= fo.wait;
+        if !state.frame_due() && !snap_due {
+            // nothing to show, but a window copy may be due: only that is drawn
+            if state.captures_ready() {
+                crate::capture::run::<R, T>(state, &mut renderer.borrow_mut());
+            }
+            return;
+        }
+        state.last_frame = std::time::Instant::now();
+        state.dirty = false;
+        let mut r = renderer.borrow_mut();
+        let elements = crate::render::elements(state, &mut *r, &output, std::time::Instant::now());
+        let want_png = snap_due || (fo.record.is_some() && state.frames < 400);
+        let mut pixels = None;
+        if let Ok(mut fb) = r.bind(&mut target) {
+            let _ = damage.render_output(&mut *r, &mut fb, 0, &elements, [0.08, 0.08, 0.1, 1.0]);
+            if want_png {
+                pixels = read_rgba(&mut *r, &fb, fo.size);
+            }
+        }
+        state.frames += 1;
+        crate::capture::run::<R, T>(state, &mut r);
+        drop(r);
+        if let (Some(dir), Some(px)) = (&fo.record, &pixels) {
+            let _ = save_png(px, fo.size, &dir.join(format!("frame-{:04}-{:06}ms.png", state.frames, state.start.elapsed().as_millis())));
+        }
+        let now = state.now_ms();
+        for w in state.space.elements() {
+            if !state.wants_frame(w) {
+                continue;
+            }
+            w.send_frame(&output, Duration::from_millis(now as u64), Some(Duration::ZERO), |_, _| Some(output.clone()));
+        }
+        let map = smithay::desktop::layer_map_for_output(&output);
+        for l in map.layers() {
+            l.send_frame(&output, Duration::from_millis(now as u64), Some(Duration::ZERO), |_, _| Some(output.clone()));
+        }
+        drop(map);
+        state.space.refresh();
+        state.popups.cleanup();
+        let _ = state.dh.flush_clients();
+        if let (Some(path), true) = (&fo.snapshot, snap_due) {
+            match pixels.as_ref().ok_or_else(|| "nothing read back".to_string()).and_then(|px| save_png(px, fo.size, path).map_err(|e| e.to_string())) {
+                Ok(()) => eprintln!("loom: wrote {} ({} frames drawn in {:.1} s)", path.display(), state.frames, state.start.elapsed().as_secs_f64()),
+                Err(e) => eprintln!("loom: {e}"),
+            }
+            state.signal.stop();
         }
     }
+}
+
+/// What the framebuffer shows, as RGBA bytes (R G B A in memory: Abgr8888).
+fn read_rgba<R: ExportMem>(r: &mut R, fb: &R::Framebuffer<'_>, size: (i32, i32)) -> Option<Vec<u8>> {
+    let mapping = r.copy_framebuffer(fb, smithay::utils::Rectangle::from_size(size.into()), Fourcc::Abgr8888).ok()?;
+    r.map_texture(&mapping).ok().map(|b| b.to_vec())
+}
+
+/// RGBA bytes as a PNG (opaque).
+fn save_png(px: &[u8], size: (i32, i32), path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+    let mut rgba = px.to_vec();
+    for p in rgba.chunks_exact_mut(4) {
+        p[3] = 255;
+    }
     let file = std::io::BufWriter::new(std::fs::File::create(path)?);
-    let mut enc = png::Encoder::new(file, w as u32, h as u32);
+    let mut enc = png::Encoder::new(file, size.0 as u32, size.1 as u32);
     enc.set_color(png::ColorType::Rgba);
     enc.set_depth(png::BitDepth::Eight);
     enc.write_header()?.write_image_data(&rgba)?;
