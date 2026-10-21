@@ -71,6 +71,8 @@ pub struct Loom {
     pub focused: Option<Window>,
     /// Hyprland's IPC (hypr_ipc.rs): the event socket's listeners
     pub hypr: Option<crate::hypr_ipc::HyprIpc>,
+    /// each workspace's AwesomeWM layout (layouts.rs)
+    pub layouts: crate::layouts::Layouts,
     /// the Wayland socket programs connect to (WAYLAND_DISPLAY for what loom starts)
     pub socket_name: Option<String>,
 }
@@ -103,6 +105,7 @@ impl Loom {
             active_ws: 1,
             focused: None,
             hypr: None,
+            layouts: crate::layouts::Layouts::load(),
             socket_name: None,
             start: Instant::now(),
             signal,

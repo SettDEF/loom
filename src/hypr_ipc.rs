@@ -158,6 +158,19 @@ impl Loom {
                     self.focus_window(&m.window);
                 }
             }
+            // the AwesomeWM layouts' messages (suit, next, mwfact, nmaster, ncol, swapmaster, reset)
+            "layoutmsg" => {
+                let ws = self.active_ws.to_string();
+                match self.layouts.message(&ws, a) {
+                    Ok(swap) => {
+                        if swap {
+                            self.swap_master();
+                        }
+                        self.relayout();
+                    }
+                    Err(e) => return e,
+                }
+            }
             "exit" => self.signal.stop(),
             _ => return format!("Invalid dispatcher {d}"),
         }

@@ -18,6 +18,7 @@ The milestones of [PLAN.md](PLAN.md), each step a line; ticked when it works wit
 - [~] animations: windows open (fade + grow, from their first frame) and move (glide) with Hyprland's bezier curves; close, resize, workspaces next
 - [x] frames only on damage (no 60 Hz loop while nothing changes: 35 frames in 6 s, all of them animation or content)
 - [x] dwindle tiling and floating, as Hyprland's defaults (gaps 5 / 10)
+- [x] the user's AwesomeWM layouts (tile, tileleft, tilebottom, tiletop, fair, fairh, spiral, dwindle, max, corner nw/ne/sw/se; mwfact, nmaster, ncol per workspace) by `hyprctl dispatch layoutmsg` as the shell sends them; state read from Hyprland's file, written to loom's own
 - [~] workspaces (any number, switched and moved to over IPC); keybinds from a config file next
 - [ ] xdg-decoration (server side), borders, gaps
 - [ ] fractional scale, viewporter, cursor shape, primary selection, xdg-activation

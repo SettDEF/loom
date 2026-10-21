@@ -25,29 +25,6 @@ pub struct Managed {
 const GAPS_IN: i32 = 5;
 const GAPS_OUT: i32 = 10;
 
-/// Dwindle: the first window takes one half of the area (split along its longer side), the rest
-/// share the other half the same way.
-pub fn dwindle(area: Rectangle<i32, Logical>, n: usize) -> Vec<Rectangle<i32, Logical>> {
-    let mut out = Vec::with_capacity(n);
-    let mut rest = area;
-    for i in 0..n {
-        if i + 1 == n {
-            out.push(rest);
-            break;
-        }
-        let (a, b) = if rest.size.w >= rest.size.h {
-            let w = (rest.size.w - GAPS_IN * 2) / 2;
-            (Rectangle::new(rest.loc, (w, rest.size.h).into()), Rectangle::new((rest.loc.x + w + GAPS_IN * 2, rest.loc.y).into(), (rest.size.w - w - GAPS_IN * 2, rest.size.h).into()))
-        } else {
-            let h = (rest.size.h - GAPS_IN * 2) / 2;
-            (Rectangle::new(rest.loc, (rest.size.w, h).into()), Rectangle::new((rest.loc.x, rest.loc.y + h + GAPS_IN * 2).into(), (rest.size.w, rest.size.h - h - GAPS_IN * 2).into()))
-        };
-        out.push(a);
-        rest = b;
-    }
-    out
-}
-
 impl Loom {
     /// A new window: on the active workspace, tiled, focused.
     pub fn manage(&mut self, window: Window) {
@@ -85,9 +62,15 @@ impl Loom {
         let Some(geo) = self.space.output_geometry(&output) else { return };
         let mut area = layer_map_for_output(&output).non_exclusive_zone();
         area.loc += geo.loc;
-        let area = Rectangle::new((area.loc.x + GAPS_OUT, area.loc.y + GAPS_OUT).into(), (area.size.w - 2 * GAPS_OUT, area.size.h - 2 * GAPS_OUT).into());
+        // gaps as Hyprland's: the edge gets gaps_out, between two windows twice gaps_in
+        let inset = GAPS_OUT - GAPS_IN;
+        let area = Rectangle::new((area.loc.x + inset, area.loc.y + inset).into(), (area.size.w - 2 * inset, area.size.h - 2 * inset).into());
         let tiled: Vec<Window> = self.managed.iter().filter(|m| m.ws == self.active_ws && !m.floating).map(|m| m.window.clone()).collect();
-        let rects = dwindle(area, tiled.len());
+        let suit = self.layouts.of(&self.active_ws.to_string());
+        let rects: Vec<Rectangle<i32, Logical>> = crate::layouts::arrange(tiled.len(), area, &suit)
+            .into_iter()
+            .map(|r| Rectangle::new((r.loc.x + GAPS_IN, r.loc.y + GAPS_IN).into(), ((r.size.w - 2 * GAPS_IN).max(1), (r.size.h - 2 * GAPS_IN).max(1)).into()))
+            .collect();
         let now = std::time::Instant::now();
         for (win, rect) in tiled.into_iter().zip(rects) {
             if let Some(t) = win.toplevel() {
@@ -153,6 +136,17 @@ impl Loom {
         self.relayout();
     }
 
+    /// swapmaster: the focused window first on its workspace (the master slot).
+    pub fn swap_master(&mut self) {
+        let Some(w) = self.focused.clone() else { return };
+        let ws = self.active_ws;
+        let first = self.managed.iter().position(|m| m.ws == ws && !m.floating);
+        let me = self.managed.iter().position(|m| m.window == w);
+        if let (Some(a), Some(b)) = (first, me) {
+            self.managed.swap(a, b);
+        }
+    }
+
     /// The workspaces in use (with windows, or shown), sorted.
     pub fn workspace_ids(&self) -> Vec<i32> {
         let mut ids: Vec<i32> = self.managed.iter().map(|m| m.ws).chain([self.active_ws]).collect();
@@ -172,19 +166,3 @@ impl Loom {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn dwindle_halves_along_the_longer_side() {
-        let area = Rectangle::new((0, 0).into(), (1000, 600).into());
-        assert_eq!(dwindle(area, 1), vec![area]);
-        let two = dwindle(area, 2);
-        assert_eq!(two[0], Rectangle::new((0, 0).into(), (495, 600).into()));
-        assert_eq!(two[1].loc.x, 505, "the gap between them");
-        let three = dwindle(area, 3);
-        assert_eq!(three[1].size.h, three[2].size.h, "the right half split top and bottom");
-        assert!(three[1].loc.y < three[2].loc.y);
-    }
-}
