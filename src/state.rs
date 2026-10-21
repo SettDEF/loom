@@ -107,6 +107,7 @@ impl Loom {
         seat.add_pointer();
         crate::hypr_proto::init(&dh);
         crate::foreign::init(&dh);
+        crate::hypr_proto::init_mapping(&dh);
         Loom {
             compositor_state: CompositorState::new::<Loom>(&dh),
             xdg_shell_state: XdgShellState::new::<Loom>(&dh),

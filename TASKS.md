@@ -35,7 +35,8 @@ The milestones of [PLAN.md](PLAN.md), each step a line; ticked when it works wit
 - [x] hyprland-global-shortcuts-v1: Quickshell's GlobalShortcuts register, `dispatch global quickshell:NAME` fires them (binds next, with the keybind config)
 - [x] hyprland-focus-grab-v1: the grab gets the keyboard, a click outside clears it (tested with a Quickshell HyprlandFocusGrab)
 - [x] wlr-foreign-toplevel-management: the dock's window list (Quickshell ToplevelManager): every window incl. X ones, title, app id, active, fullscreen; activate (switches workspace), close, fullscreen
-- [ ] hyprland-toplevel-export-v1, hyprland-toplevel-mapping-v1 (window previews)
+- [x] hyprland-toplevel-mapping-v1: the dock's windows linked to their Hyprland addresses (Quickshell HyprlandToplevel.wayland)
+- [ ] hyprland-toplevel-export-v1 (window previews: a window drawn into the shell's buffer)
 - [~] hyprland-surface-v1 (opacity drawn), hyprland-lock-notify-v1 (until the lock screen), hyprland-ctm-control-v1 (accepted; drawn with M4)
 - [x] the `ii` shell runs on loom headless (scripts/run-ii.sh: bubblewrap sandbox, throwaway overlays, own pid space and D-Bus, no audio or system bus): bar, dock, desktop, widgets all up; 12 warnings, 11 from the sandbox, 1 loom's (toplevel mapping)
 

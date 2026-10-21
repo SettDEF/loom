@@ -242,3 +242,56 @@ impl Loom {
         self.proto.opacity.get(&s.id()).copied().unwrap_or(1.0)
     }
 }
+
+// ── hyprland-toplevel-mapping-v1: a window of the dock's list → its Hyprland address ──
+
+pub mod mapping {
+    #![allow(dead_code, non_camel_case_types, unused_unsafe, unused_variables, non_upper_case_globals, non_snake_case, unused_imports, missing_docs, clippy::all)]
+    use smithay::reexports::wayland_protocols::ext::foreign_toplevel_list::v1::server::*;
+    use smithay::reexports::wayland_protocols_wlr::foreign_toplevel::v1::server::*;
+    use wayland_server;
+    use wayland_server::protocol::*;
+    pub mod __interfaces {
+        use smithay::reexports::wayland_protocols::ext::foreign_toplevel_list::v1::server::__interfaces::*;
+        use smithay::reexports::wayland_protocols_wlr::foreign_toplevel::v1::server::__interfaces::*;
+        use wayland_server::backend as wayland_backend;
+        use wayland_server::protocol::__interfaces::*;
+        wayland_scanner::generate_interfaces!("protocols/hyprland-toplevel-mapping-v1.xml");
+    }
+    use self::__interfaces::*;
+    wayland_scanner::generate_server_code!("protocols/hyprland-toplevel-mapping-v1.xml");
+}
+
+use mapping::{
+    hyprland_toplevel_mapping_manager_v1::{self as map_m, HyprlandToplevelMappingManagerV1},
+    hyprland_toplevel_window_mapping_handle_v1::{self as map_h, HyprlandToplevelWindowMappingHandleV1},
+};
+
+pub fn init_mapping(dh: &DisplayHandle) {
+    dh.create_global::<Loom, HyprlandToplevelMappingManagerV1, ()>(1, ());
+}
+bind_plain!(HyprlandToplevelMappingManagerV1);
+
+impl Dispatch<HyprlandToplevelMappingManagerV1, ()> for Loom {
+    fn request(state: &mut Self, _: &Client, _: &HyprlandToplevelMappingManagerV1, request: map_m::Request, _: &(), _: &DisplayHandle, data_init: &mut DataInit<'_, Self>) {
+        match request {
+            map_m::Request::GetWindowForToplevelWlr { handle, toplevel } => {
+                let h = data_init.init(handle, ());
+                // the address the dock's handle was made for (foreign.rs keeps it as its data)
+                match toplevel.data::<u64>().copied().filter(|a| state.managed.iter().any(|m| m.addr == *a)) {
+                    Some(addr) => h.window_address((addr >> 32) as u32, addr as u32),
+                    None => h.failed(),
+                }
+            }
+            map_m::Request::GetWindowForToplevel { handle, .. } => {
+                // ext-foreign-toplevel-list is not served yet
+                data_init.init(handle, ()).failed();
+            }
+            _ => {}
+        }
+    }
+}
+
+impl Dispatch<HyprlandToplevelWindowMappingHandleV1, ()> for Loom {
+    fn request(_: &mut Self, _: &Client, _: &HyprlandToplevelWindowMappingHandleV1, _: map_h::Request, _: &(), _: &DisplayHandle, _: &mut DataInit<'_, Self>) {}
+}
