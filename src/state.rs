@@ -4,8 +4,8 @@
 use std::{os::unix::io::OwnedFd, sync::Arc, time::Instant};
 
 use smithay::{
-    delegate_compositor, delegate_data_device, delegate_output, delegate_seat, delegate_shm, delegate_xdg_shell,
-    desktop::{PopupKind, PopupManager, Space, Window},
+    delegate_compositor, delegate_data_device, delegate_layer_shell, delegate_output, delegate_seat, delegate_shm, delegate_xdg_shell,
+    desktop::{layer_map_for_output, LayerSurface, PopupKind, PopupManager, Space, Window, WindowSurfaceType},
     input::{Seat, SeatHandler, SeatState},
     output::Output,
     reexports::{
@@ -19,12 +19,13 @@ use smithay::{
     utils::{Rectangle, Serial},
     wayland::{
         buffer::BufferHandler,
-        compositor::{get_parent, is_sync_subsurface, CompositorClientState, CompositorHandler, CompositorState},
+        compositor::{get_parent, is_sync_subsurface, with_states, CompositorClientState, CompositorHandler, CompositorState},
         output::{OutputHandler, OutputManagerState},
         selection::{
             data_device::{ClientDndGrabHandler, DataDeviceHandler, DataDeviceState, ServerDndGrabHandler},
             SelectionHandler,
         },
+        shell::wlr_layer::{Layer, LayerSurface as WlrLayerSurface, LayerSurfaceData, WlrLayerShellHandler, WlrLayerShellState},
         shell::xdg::{PopupSurface, PositionerState, ToplevelSurface, XdgShellHandler, XdgShellState},
         shm::{ShmHandler, ShmState},
     },
@@ -39,6 +40,7 @@ pub struct Loom {
     pub signal: LoopSignal,
     pub compositor_state: CompositorState,
     pub xdg_shell_state: XdgShellState,
+    pub layer_shell_state: WlrLayerShellState,
     pub shm_state: ShmState,
     pub seat_state: SeatState<Loom>,
     pub data_device_state: DataDeviceState,
@@ -62,6 +64,7 @@ impl Loom {
         Loom {
             compositor_state: CompositorState::new::<Loom>(&dh),
             xdg_shell_state: XdgShellState::new::<Loom>(&dh),
+            layer_shell_state: WlrLayerShellState::new::<Loom>(&dh),
             shm_state: ShmState::new::<Loom>(&dh, vec![]),
             data_device_state: DataDeviceState::new::<Loom>(&dh),
             _output_manager_state: OutputManagerState::new_with_xdg_output::<Loom>(&dh),
@@ -78,7 +81,11 @@ impl Loom {
 
     /// The windows side by side across the output (milestone 1 brings dwindle tiling).
     pub fn relayout(&mut self) {
-        let Some(area) = self.output.as_ref().and_then(|o| self.space.output_geometry(o)) else { return };
+        let Some(output) = self.output.clone() else { return };
+        let Some(geo) = self.space.output_geometry(&output) else { return };
+        // what the layers (bar, dock) leave free
+        let mut area = layer_map_for_output(&output).non_exclusive_zone();
+        area.loc += geo.loc;
         let windows: Vec<Window> = self.space.elements().cloned().collect();
         let n = windows.len().max(1) as i32;
         let gap = 8;
@@ -136,6 +143,22 @@ impl CompositorHandler for Loom {
     fn commit(&mut self, surface: &WlSurface) {
         on_commit_buffer_handler::<Self>(surface);
         self.popups.commit(surface);
+        // a layer surface (bar, dock, panel): arranged on its output, its first configure sent
+        if let Some(output) = self.output.clone() {
+            let mut map = layer_map_for_output(&output);
+            if let Some(layer) = map.layer_for_surface(surface, WindowSurfaceType::TOPLEVEL).cloned() {
+                let sent = with_states(surface, |s| s.data_map.get::<LayerSurfaceData>().map(|d| d.lock().unwrap().initial_configure_sent).unwrap_or(true));
+                let moved = map.arrange();
+                if !sent {
+                    layer.layer_surface().send_configure();
+                }
+                drop(map);
+                if moved {
+                    self.relayout();
+                }
+                return;
+            }
+        }
         // a popup's first commit: its place (from its positioner)
         if let Some(PopupKind::Xdg(p)) = self.popups.find_popup(surface) {
             if !p.is_initial_configure_sent() {
@@ -194,6 +217,28 @@ impl XdgShellHandler for Loom {
     }
 }
 
+impl WlrLayerShellHandler for Loom {
+    fn shell_state(&mut self) -> &mut WlrLayerShellState {
+        &mut self.layer_shell_state
+    }
+    fn new_layer_surface(&mut self, surface: WlrLayerSurface, _output: Option<smithay::reexports::wayland_server::protocol::wl_output::WlOutput>, _layer: Layer, namespace: String) {
+        // one output so far: every layer goes on it
+        let Some(output) = self.output.clone() else { return };
+        let mut map = layer_map_for_output(&output);
+        let _ = map.map_layer(&LayerSurface::new(surface, namespace));
+    }
+    fn layer_destroyed(&mut self, surface: WlrLayerSurface) {
+        let Some(output) = self.output.clone() else { return };
+        let mut map = layer_map_for_output(&output);
+        let gone = map.layers().find(|l| l.layer_surface() == &surface).cloned();
+        if let Some(l) = gone {
+            map.unmap_layer(&l);
+        }
+        drop(map);
+        self.relayout();
+    }
+}
+
 impl BufferHandler for Loom {
     fn buffer_destroyed(&mut self, _buffer: &wl_buffer::WlBuffer) {}
 }
@@ -249,3 +294,4 @@ delegate_shm!(Loom);
 delegate_seat!(Loom);
 delegate_data_device!(Loom);
 delegate_output!(Loom);
+delegate_layer_shell!(Loom);

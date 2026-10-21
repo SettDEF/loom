@@ -14,7 +14,7 @@ The milestones of [PLAN.md](PLAN.md), each step a line; ticked when it works wit
 
 ## 1. Windows
 
-- [ ] wlr-layer-shell first (docks, the shell's bar, panels; exclusive zones keep windows clear)
+- [x] wlr-layer-shell first (docks, the shell's bar, panels; exclusive zones keep windows clear: a Quickshell bar and dock with a window between)
 - [ ] animations: windows open, close, move, resize; workspaces slide (bezier curves)
 - [ ] frames only on damage (no 60 Hz loop while nothing changes)
 - [ ] dwindle tiling and floating, as Hyprland's defaults
