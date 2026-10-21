@@ -19,6 +19,23 @@ Hyprland's internals on every release. loom is built for both from the start.
   workspaces.conf, window rules, the AwesomeWM layouts (lua:awesomewm), ii-decor title bars,
   screen shaders (hypr/shaders, the shell's AppDisplay), blur/rounding/shadows/animations.
 
+## Goals the user set (2026-10-21)
+
+- **Faster**: every frame drawn only when something changed (damage), the GPU renderer with direct
+  scanout for full-screen windows, measured frame times (a budget, checked by a test), never a
+  frame late because of loom.
+- **Animations** from the start: windows opening, closing, moving and resizing, workspaces
+  sliding, layers fading; curves as Hyprland's config writes them (bezier) and KDE's.
+- **Docks**: layer-shell, foreign-toplevel (wlr and ext) and plasma-window-management, so the
+  shell's dock, KDE's and any other one work.
+- **Extensions later, from the KDE Store**: KWin scripts and effects from store.kde.org run on
+  loom as they do on KWin (its scripting API), plus loom's own (custom animations, effects);
+  install, update and remove from one place, and they simply work.
+- **X windows natively**: XWayland built in so X programs are ordinary windows (sharp at any
+  scale, clipboard and drag and drop shared, games and Steam fine).
+- **Both desktops perfectly**: everything the shell expects of Hyprland, everything KDE's
+  programs expect of KWin.
+
 ## Rules
 
 - Never replace the running session while testing: every milestone is tested **headless**

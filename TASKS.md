@@ -14,10 +14,12 @@ The milestones of [PLAN.md](PLAN.md), each step a line; ticked when it works wit
 
 ## 1. Windows
 
+- [ ] wlr-layer-shell first (docks, the shell's bar, panels; exclusive zones keep windows clear)
+- [ ] animations: windows open, close, move, resize; workspaces slide (bezier curves)
+- [ ] frames only on damage (no 60 Hz loop while nothing changes)
 - [ ] dwindle tiling and floating, as Hyprland's defaults
 - [ ] workspaces 1–10, keybinds from a config file
 - [ ] xdg-decoration (server side), borders, gaps
-- [ ] wlr-layer-shell (the shell's bar, dock, panels: `qs -c ii` shows its bar)
 - [ ] fractional scale, viewporter, cursor shape, primary selection, xdg-activation
 
 ## 2. Hyprland compatibility
@@ -62,6 +64,7 @@ The milestones of [PLAN.md](PLAN.md), each step a line; ticked when it works wit
 
 ## 6. Looks
 
+- [ ] extensions: KWin scripts and effects from the KDE Store, loom's own (custom animations), one place to get them
 - [ ] rounding, shadows, blur, animations
 - [ ] screen shaders (the shell's AppDisplay effects), the title bars ii-decor draws today
 
