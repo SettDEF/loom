@@ -36,7 +36,7 @@ The milestones of [PLAN.md](PLAN.md), each step a line; ticked when it works wit
 - [x] hyprland-focus-grab-v1: the grab gets the keyboard, a click outside clears it (tested with a Quickshell HyprlandFocusGrab)
 - [ ] hyprland-toplevel-export-v1, hyprland-toplevel-mapping-v1 (window previews)
 - [~] hyprland-surface-v1 (opacity drawn), hyprland-lock-notify-v1 (until the lock screen), hyprland-ctm-control-v1 (accepted; drawn with M4)
-- [ ] the `ii` shell runs on loom headless with a clean log
+- [x] the `ii` shell runs on loom headless (scripts/run-ii.sh: bubblewrap sandbox, throwaway overlays, own pid space and D-Bus, no audio or system bus): bar, dock, desktop, widgets all up; 12 warnings, 11 from the sandbox, 1 loom's (toplevel mapping)
 
 ## 3. KDE compatibility
 
