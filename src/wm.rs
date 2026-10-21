@@ -76,6 +76,7 @@ impl Loom {
         self.anims.remove(&m.addr);
         self.hypr_event(&format!("closewindow>>{:x}", m.addr));
         self.foreign_closed(m.addr);
+        self.decor.borrow_mut().forget(m.addr);
         if self.focused.as_ref() == Some(window) {
             self.focused = None;
             if let Some(next) = self.managed.iter().rev().find(|m| m.ws == self.active_ws).map(|m| m.window.clone()) {
@@ -132,7 +133,18 @@ impl Loom {
             .map(|r| { let g = self.look.gaps_in.round() as i32; Rectangle::new((r.loc.x + g, r.loc.y + g).into(), ((r.size.w - 2 * g).max(1), (r.size.h - 2 * g).max(1)).into()) })
             .collect();
         let now = std::time::Instant::now();
+        let maxed = self.maximized.clone();
         for ((win, addr), rect) in tiled.into_iter().zip(rects) {
+            // maximized: the whole area; a title bar (ii-decor) takes its top, the window the rest
+            let rect = if maxed.as_ref() == Some(&win) {
+                let g = self.look.gaps_in.round() as i32;
+                Rectangle::new((area.loc.x + g, area.loc.y + g).into(), ((area.size.w - 2 * g).max(1), (area.size.h - 2 * g).max(1)).into())
+            } else {
+                rect
+            };
+            let raise = raise || maxed.as_ref() == Some(&win);
+            let bh = self.bar_height(&win).round() as i32;
+            let rect = Rectangle::new((rect.loc.x, rect.loc.y + bh).into(), (rect.size.w, (rect.size.h - bh).max(1)).into());
             if let Some(t) = win.toplevel() {
                 t.with_pending_state(|s| {
                     s.size = Some(rect.size);

@@ -37,6 +37,7 @@ impl Loom {
             self.drag_update(at);
             return;
         }
+        self.decor_hover();
         let focus = self.surface_at(at);
         let pointer = self.seat.get_pointer().expect("pointer");
         pointer.motion(self, focus, &MotionEvent { location: at, serial: SERIAL_COUNTER.next_serial(), time });
@@ -67,6 +68,10 @@ impl Loom {
             }
         }
         if consume {
+            return;
+        }
+        // a title bar or button pill (ii-decor) takes the click before the program under it
+        if self.decor_button(pressed, button, time) {
             return;
         }
         // a press on a window: it comes up and has the keyboard
@@ -116,6 +121,12 @@ impl Loom {
 
     fn drag_start(&mut self, resize: bool, button: u32) {
         let Some(w) = self.space.element_under(self.pointer_at).map(|(w, _)| w.clone()) else { return };
+        self.drag_start_on(&w, resize, button);
+    }
+
+    /// A drag of window `w` (its title bar dragged, or a mouse bind over it).
+    pub fn drag_start_on(&mut self, w: &Window, resize: bool, button: u32) {
+        let w = w.clone();
         let Some(m) = self.managed_of(&w).cloned() else { return };
         let Some(start) = self.space.element_geometry(&w) else { return };
         let was_tiled = !m.floating;

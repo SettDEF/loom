@@ -111,6 +111,9 @@ pub struct Loom {
     /// per-second counts for the stats line (LOOM_STATS=1, always on a console)
     /// the settings (config.rs: Hyprland's, then init.lua)
     pub look: crate::config::Look,
+    /// the ii-decor title bars (decor.rs); the maximized window, if one is
+    pub decor: std::cell::RefCell<crate::decor::Decor>,
+    pub maximized: Option<Window>,
     pub stats_on: bool,
     pub stats: Stats,
     /// frame pacing (event driven, no ticking timer): the last frame drawn, a wake-up for the next one armed
@@ -184,6 +187,8 @@ impl Loom {
             cursor_status: smithay::input::pointer::CursorImageStatus::default_named(),
             frames_owed: false,
             look: crate::config::load().0,
+            decor: Default::default(),
+            maximized: None,
             stats_on: std::env::var_os("LOOM_STATS").is_some(),
             stats: Default::default(),
             last_frame: Instant::now(),

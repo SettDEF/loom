@@ -10,6 +10,7 @@ mod hypr_proto;
 mod binds;
 mod capture;
 mod config;
+mod decor;
 mod decoration;
 mod focus;
 mod gpu;

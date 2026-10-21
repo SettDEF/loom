@@ -28,6 +28,8 @@ The milestones of [PLAN.md](PLAN.md), each step a line; ticked when it works wit
 - [x] xdg-decoration + KDE server-decoration: programs draw no title bar or borders (as on Hyprland); zash's CPU-drawn frame (≈190 CPU buffers/s, the TTY slowness) gone
 - [x] rounded corners (a GL shader masks each window's own surfaces; popups untouched; fullscreen square; Hyprland's rounding and rounding_power)
 - [x] settings Neovim style: Hyprland's values, then ~/.config/loom/init.lua (loom.opt.x = …, loom.setup{…}, loom.hyprland.*), applied live on save (inotify), errors keep the last good ones
+- [x] the user's ii-decor title bars, native: ii-decor.json + ii-decor.d read as the plugin does (exclude/include, per class, overlay pills for integrated apps), bar with icon + centred title + dots (close outermost, hover darker), buttons act on release over the same dot (close, minimize to special, maximize), drag the bar to move, double click maximizes; drawn once with cosmic-text + tiny-skia and cached; live reload of its files
+- [ ] ii-decor: blur behind the bar (glass), custom buttons, button image themes, layout lists in the config
 - [ ] borders, gaps drawn by loom (milestone 6 looks)
 - [x] stats line (LOOM_STATS=1, always on a console): frames/s, render time, GPU vs CPU buffers and which program sends CPU ones
 - [ ] fractional scale, viewporter, cursor shape, primary selection, xdg-activation

@@ -149,18 +149,29 @@ impl crate::state::Loom {
         let Some(dir) = path.parent().map(std::path::Path::to_path_buf) else { return };
         let _ = std::fs::create_dir_all(&dir);
         let Ok(ino) = Inotify::init() else { return };
-        if ino.watches().add(&dir, WatchMask::CLOSE_WRITE | WatchMask::MOVED_TO | WatchMask::CREATE | WatchMask::DELETE).is_err() {
+        let mask = WatchMask::CLOSE_WRITE | WatchMask::MOVED_TO | WatchMask::CREATE | WatchMask::DELETE;
+        if ino.watches().add(&dir, mask).is_err() {
             return;
         }
+        // ii-decor's files too (its title bars): the Hyprland folder and ii-decor.d
+        let hypr = home().join(".config/hypr");
+        let _ = ino.watches().add(&hypr, mask);
+        let _ = ino.watches().add(hypr.join("ii-decor.d"), mask);
         let Some(h) = self.loop_handle.clone() else { return };
         let src = smithay::reexports::calloop::generic::Generic::new(ino, smithay::reexports::calloop::Interest::READ, smithay::reexports::calloop::Mode::Level);
         let _ = h.insert_source(src, |_, ino, state: &mut crate::state::Loom| {
             let mut buf = [0u8; 1024];
             // Safety: the inotify fd is not dropped while the source lives
             let ino = unsafe { ino.get_mut() };
-            let touched = ino.read_events(&mut buf).map(|evs| evs.into_iter().any(|e| e.name.is_some_and(|n| n == "init.lua"))).unwrap_or(false);
-            if touched {
+            let names: Vec<String> = ino.read_events(&mut buf).map(|evs| evs.into_iter().filter_map(|e| e.name.map(|n| n.to_string_lossy().to_string())).collect()).unwrap_or_default();
+            if names.iter().any(|n| n == "init.lua") {
                 state.reload_config();
+            }
+            // ii-decor.json, or a file in ii-decor.d: the bars read again and drawn anew
+            if names.iter().any(|n| n == "ii-decor.json" || (n.ends_with(".json") && n != "ii-decor.json" && !n.starts_with('.'))) {
+                state.decor.borrow_mut().reload();
+                state.relayout();
+                eprintln!("loom: ii-decor settings read again");
             }
             Ok(smithay::reexports::calloop::PostAction::Continue)
         });
