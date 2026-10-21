@@ -63,7 +63,8 @@ The milestones of [PLAN.md](PLAN.md), each step a line; ticked when it works wit
 ## 5. The rest of a day
 
 - [x] Xwayland + window manager: X windows tiled in the layouts, on workspaces, in `hyprctl clients` with xwayland: true; dialogs float centred, menus/tooltips where the program puts them; click focus and typing reach X (xterm, xeyes, xmessage tested)
-- [ ] Xwayland started on demand (on the first X connection), not with loom
+- [x] Xwayland started on demand: the X display reserved and watched, Xwayland starts with the first X program (no X program = no Xwayland, 54 MB saved)
+- [ ] Xwayland ending after its last X program (it stays up: the window manager's connection seems to keep `-terminate` from firing; needs an X client count, e.g. XRes)
 - [ ] X clipboard and drag and drop shared with Wayland; HiDPI per app (sharp or scaled)
 - [ ] Steam and games (fullscreen, pointer lock, direct scanout) on the real screen (M4)
 - [ ] loom's own X server (Rust): core protocol + MIT-SHM + XKB + RandR; xterm, xeyes, xclock run without Xwayland

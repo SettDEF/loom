@@ -93,6 +93,7 @@ pub struct Loom {
     /// Xwayland's window manager once it runs, its display (DISPLAY=:N for what loom starts)
     pub xwm: Option<smithay::xwayland::X11Wm>,
     pub x_display: Option<u32>,
+    pub x: crate::xwayland::XState,
     pub xwayland_shell_state: smithay::wayland::xwayland_shell::XWaylandShellState,
 }
 
@@ -139,6 +140,7 @@ impl Loom {
             socket_name: None,
             xwm: None,
             x_display: None,
+            x: Default::default(),
             xwayland_shell_state: smithay::wayland::xwayland_shell::XWaylandShellState::new::<Loom>(&dh),
             start: Instant::now(),
             signal,

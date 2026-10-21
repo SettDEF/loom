@@ -109,6 +109,14 @@ impl XWayland {
     /// handle can be inserted in your event loop, and If everything goes well,
     /// you'll eventually receive an `XWaylandEvent::Ready`, indicating that
     /// it's time to start the X11 window manager.
+    /// loom: the X display reserved (lock file and listening sockets) without starting
+    /// Xwayland, so it can be started when the first X client connects.
+    pub fn reserve(display: Option<u32>, open_abstract_socket: bool) -> std::io::Result<XWaylandReserved> {
+        let (lock, listen_sockets) = prepare_x11_sockets(display, open_abstract_socket)?;
+        Ok(XWaylandReserved { lock, listen_sockets })
+    }
+
+    /// Spawns Xwayland on a free display (see [`XWayland::spawn_reserved`]).
     pub fn spawn<K, V, I, F>(
         dh: &DisplayHandle,
         display: impl Into<Option<u32>>,
@@ -124,10 +132,29 @@ impl XWayland {
         V: AsRef<OsStr>,
         F: FnOnce(&UserDataMap),
     {
+        let reserved = Self::reserve(display.into(), open_abstract_socket)?;
+        Self::spawn_reserved(dh, reserved, envs, stdout, stderr, user_data)
+    }
+
+    /// loom: spawns Xwayland on a display reserved earlier ([`XWayland::reserve`]).
+    pub fn spawn_reserved<K, V, I, F>(
+        dh: &DisplayHandle,
+        reserved: XWaylandReserved,
+        envs: I,
+        stdout: impl Into<std::process::Stdio>,
+        stderr: impl Into<std::process::Stdio>,
+        user_data: F,
+    ) -> std::io::Result<(Self, Client)>
+    where
+        I: IntoIterator<Item = (K, V)>,
+        K: AsRef<OsStr>,
+        V: AsRef<OsStr>,
+        F: FnOnce(&UserDataMap),
+    {
         let (x_wm_x11, x_wm_me) = UnixStream::pair()?;
         let (wl_x11, wl_me) = UnixStream::pair()?;
 
-        let (lock, listen_sockets) = prepare_x11_sockets(display.into(), open_abstract_socket)?;
+        let XWaylandReserved { lock, listen_sockets } = reserved;
         let display_number = lock.display_number();
 
         // XWayland writes the the display number and a newline to this pipe when it's ready.
@@ -399,4 +426,22 @@ unsafe fn unset_cloexec(fd: RawFd) -> std::io::Result<()> {
     let fd = BorrowedFd::borrow_raw(fd);
     rustix::io::fcntl_setfd(fd, rustix::io::FdFlags::empty())?;
     Ok(())
+}
+
+/// loom: an X display reserved but not yet served (its lock and listening sockets).
+#[derive(Debug)]
+pub struct XWaylandReserved {
+    lock: X11Lock,
+    listen_sockets: Vec<UnixStream>,
+}
+
+impl XWaylandReserved {
+    /// The display number (DISPLAY=:N).
+    pub fn display_number(&self) -> u32 {
+        self.lock.display_number()
+    }
+    /// The listening sockets' fds, to watch for the first client.
+    pub fn fds(&self) -> Vec<std::os::unix::io::RawFd> {
+        self.listen_sockets.iter().map(|s| s.as_raw_fd()).collect()
+    }
 }

@@ -7,7 +7,10 @@ use std::process::Stdio;
 
 use smithay::{
     desktop::Window,
-    reexports::calloop::LoopHandle,
+    reexports::calloop::{
+        generic::{FdWrapper, Generic},
+        Interest, LoopHandle, Mode, PostAction, RegistrationToken,
+    },
     utils::{Logical, Rectangle},
     wayland::xwayland_shell::{XWaylandShellHandler, XWaylandShellState},
     xwayland::{
@@ -18,25 +21,90 @@ use smithay::{
 
 use crate::state::Loom;
 
-/// Starts Xwayland on a free display; returns that display number (DISPLAY=:N) at once, the
-/// window manager starts when Xwayland says it is ready.
-pub fn start(handle: &LoopHandle<'static, Loom>, state: &mut Loom) -> Result<u32, Box<dyn std::error::Error>> {
-    let (xwayland, client) = XWayland::spawn(&state.dh, None, std::iter::empty::<(String, String)>(), true, Stdio::null(), Stdio::null(), |_| ())?;
-    let display = xwayland.display_number();
-    let h = handle.clone();
-    handle.insert_source(xwayland, move |event, _, state: &mut Loom| match event {
-        XWaylandEvent::Ready { x11_socket, display_number } => match X11Wm::start_wm(h.clone(), x11_socket, client.clone()) {
-            Ok(wm) => {
-                state.xwm = Some(wm);
-                eprintln!("loom: Xwayland ready, DISPLAY=:{display_number}");
-            }
-            Err(e) => eprintln!("loom: the X window manager did not start: {e}"),
-        },
-        XWaylandEvent::Error => eprintln!("loom: Xwayland did not start"),
-    })?;
-    Ok(display)
+
+/// Xwayland's state: a display reserved and watched until the first X program connects, then
+/// Xwayland running (it ends with its last client, and the display is watched again): no X
+/// program open = no Xwayland (54 MB saved, the battery and memory budget).
+#[derive(Default)]
+pub struct XState {
+    pub reserved: Option<smithay::xwayland::XWaylandReserved>,
+    pub watches: Vec<RegistrationToken>,
+    pub server: Option<RegistrationToken>,
+    pub starting: bool,
 }
 
+/// Reserves a free X display (`display` to keep the same one) and watches it; returns its number.
+pub fn start(handle: &LoopHandle<'static, Loom>, state: &mut Loom) -> Result<u32, Box<dyn std::error::Error>> {
+    let reserved = XWayland::reserve(state.x_display, true)?;
+    let n = reserved.display_number();
+    for fd in reserved.fds() {
+        // Safety: the fd belongs to `reserved`, kept until these watches are removed
+        let w = unsafe { FdWrapper::new(fd) };
+        let token = handle.insert_source(Generic::new(w, Interest::READ, Mode::Level), |_, _, state: &mut Loom| {
+            if !state.x.starting {
+                state.x.starting = true;
+                if let Some(h) = state.loop_handle.clone() {
+                    h.insert_idle(|state| state.x_spawn());
+                }
+            }
+            Ok(PostAction::Continue)
+        })?;
+        state.x.watches.push(token);
+    }
+    state.x.reserved = Some(reserved);
+    Ok(n)
+}
+
+impl Loom {
+    /// The first X client knocked: Xwayland starts on the reserved display and takes it.
+    fn x_spawn(&mut self) {
+        let Some(h) = self.loop_handle.clone() else { return };
+        for t in self.x.watches.drain(..) {
+            h.remove(t);
+        }
+        let Some(reserved) = self.x.reserved.take() else { return };
+        let spawned = XWayland::spawn_reserved(&self.dh, reserved, std::iter::empty::<(String, String)>(), Stdio::null(), Stdio::null(), |_| ());
+        let (xwayland, client) = match spawned {
+            Ok(x) => x,
+            Err(e) => {
+                eprintln!("loom: Xwayland did not start: {e}");
+                return;
+            }
+        };
+        let h2 = h.clone();
+        let token = h.insert_source(xwayland, move |event, _, state: &mut Loom| match event {
+            XWaylandEvent::Ready { x11_socket, display_number } => match X11Wm::start_wm(h2.clone(), x11_socket, client.clone()) {
+                Ok(wm) => {
+                    state.xwm = Some(wm);
+                    state.x.starting = false;
+                    eprintln!("loom: Xwayland started for the first X program, DISPLAY=:{display_number}");
+                }
+                Err(e) => eprintln!("loom: the X window manager did not start: {e}"),
+            },
+            XWaylandEvent::Error => eprintln!("loom: Xwayland did not start"),
+        });
+        self.x.server = token.ok();
+    }
+
+    /// Xwayland ended (its last X program closed): the display is watched again.
+    fn x_ended(&mut self) {
+        self.xwm = None;
+        self.x.starting = false;
+        let Some(h) = self.loop_handle.clone() else { return };
+        if let Some(t) = self.x.server.take() {
+            h.remove(t);
+        }
+        // the old instance lets go of the display's lock as it is dropped: watch it again then
+        h.insert_idle(|state| {
+            let Some(h) = state.loop_handle.clone() else { return };
+            if let Err(e) = start(&h, state) {
+                eprintln!("loom: X display not watched again: {e}");
+            } else {
+                eprintln!("loom: Xwayland ended with its last X program; DISPLAY=:{} waits for the next", state.x_display.unwrap_or(0));
+            }
+        });
+    }
+}
 /// Floats rather than tiles: dialogs, utilities, splash screens, anything transient for a window.
 fn floats(x: &X11Surface) -> bool {
     x.is_transient_for().is_some() || matches!(x.window_type(), Some(WmWindowType::Dialog | WmWindowType::Utility | WmWindowType::Splash | WmWindowType::Toolbar))
@@ -139,6 +207,9 @@ impl XwmHandler for Loom {
         }
     }
     fn resize_request(&mut self, _xwm: XwmId, _x: X11Surface, _button: u32, _edge: ResizeEdge) {}
+    fn disconnected(&mut self, _xwm: XwmId) {
+        self.x_ended();
+    }
     fn move_request(&mut self, _xwm: XwmId, _x: X11Surface, _button: u32) {}
 }
 

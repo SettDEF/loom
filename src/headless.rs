@@ -59,7 +59,7 @@ pub fn run(opts: Options) -> Result<(), Box<dyn std::error::Error>> {
         eprintln!("loom: {} binds from {}", state.binds.binds.len(), p.display());
     }
     state.hypr = Some(crate::hypr_ipc::start(&event_loop.handle())?);
-    // X programs: Xwayland, started now (on demand later)
+    // X programs: the display reserved now, Xwayland started by the first X program
     match crate::xwayland::start(&event_loop.handle(), &mut state) {
         Ok(n) => state.x_display = Some(n),
         Err(e) => eprintln!("loom: no Xwayland: {e}"),
