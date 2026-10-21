@@ -53,6 +53,7 @@ pub fn run(opts: Options) -> Result<(), Box<dyn std::error::Error>> {
     };
     let socket_name = socket.socket_name().to_string_lossy().to_string();
     state.socket_name = Some(socket_name.clone());
+    state.loop_handle = Some(event_loop.handle());
     if let Some(p) = &opts.binds {
         state.binds = crate::binds::Binds::load(p);
         eprintln!("loom: {} binds from {}", state.binds.binds.len(), p.display());

@@ -130,6 +130,9 @@ impl Loom {
         let (d, a) = arg.split_once(' ').map(|(x, y)| (x, y.trim())).unwrap_or((arg, ""));
         let ws_of = |s: &Loom, a: &str| -> Option<i32> {
             let a = a.trim();
+            if a == "special" || a.starts_with("special:") {
+                return Some(crate::wm::SPECIAL);
+            }
             if let Some(r) = a.strip_prefix("e").or_else(|| a.strip_prefix("r")).filter(|r| r.starts_with('+') || r.starts_with('-')) {
                 return r.parse::<i32>().ok().map(|n| (s.active_ws + n).max(1));
             }
@@ -211,6 +214,11 @@ impl Loom {
                 }
             }
             "fullscreen" | "fullscreenstate" => self.toggle_fullscreen(),
+            "movewindow" => self.move_window(a),
+            "pin" => self.toggle_pin(),
+            "resizeactive" => self.resize_active(a),
+            "togglespecialworkspace" => self.toggle_special(),
+            "sendshortcut" => self.send_shortcut(a),
             "exit" => self.signal.stop(),
             _ => return format!("Invalid dispatcher {d}"),
         }
@@ -272,7 +280,7 @@ impl Loom {
         let here: Vec<&crate::wm::Managed> = self.managed.iter().filter(|m| m.ws == id).collect();
         let last = here.last();
         json!({
-            "id": id, "name": id.to_string(),
+            "id": id, "name": if id == crate::wm::SPECIAL { "special:special".to_string() } else { id.to_string() },
             "monitor": self.output.as_ref().map(|o| o.name()).unwrap_or_default(), "monitorID": 0,
             "windows": here.len(), "hasfullscreen": false,
             "lastwindow": last.map(|m| format!("0x{:x}", m.addr)).unwrap_or_else(|| "0x0".into()),

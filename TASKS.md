@@ -22,7 +22,8 @@ The milestones of [PLAN.md](PLAN.md), each step a line; ticked when it works wit
 - [x] workspaces (any number, switched and moved to over IPC)
 - [x] keybinds: the user's own Hyprland config read as it is (sources, $vars, submaps, bind flags r e n i d, catchall, code:N, Super alone); 345 binds; one hash lookup per key, no allocation unless one matches; `keyword bind/unbind`, `hyprctl binds`, `submap`
 - [x] dispatchers: workspace, movetoworkspace(silent), exec, killactive, togglefloating, focuswindow, global, layoutmsg, submap, movefocus, cyclenext, bringactivetotop, fullscreen
-- [ ] dispatchers still missing: sendshortcut (36 binds), movewindow (4), togglespecialworkspace, pin, resizeactive; repeating binds (binde); mouse binds (bindm move/resize, mouse:N, scroll)
+- [x] sendshortcut (vim mode: h → Left, tested), movewindow, togglespecialworkspace + special workspace, pin, resizeactive; repeating binds (binde, held keys repeat at 600 ms / 25 Hz)
+- [ ] mouse binds (bindm move/resize, mouse:N, scroll); focuswindow by class:/title:
 - [ ] xdg-decoration (server side), borders, gaps
 - [ ] fractional scale, viewporter, cursor shape, primary selection, xdg-activation
 

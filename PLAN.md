@@ -89,6 +89,7 @@ Hyprland's internals on every release. loom is built for both from the start.
    screen), idle notify and inhibit, input method, tablet v2 (the pen), gestures, gamma.
 6. **Looks** — rounding, borders, shadows, blur, animations, screen shaders (the shell's
    AppDisplay effects), the title bars ii-decor draws today.
+- **Switching fast** (the user, 2026-10-21): loom and Hyprland side by side on two TTYs (Ctrl+Alt+F-key between them) while trying it; later a live swap: loom takes over the Wayland socket name and Qt programs (the shell, KDE apps, zett) reconnect without restarting (QT_WAYLAND_RECONNECT), the same machinery as restarting loom itself without losing windows.
 7. **Switch** — a session entry, the user's config read (the .conf source), a week on it
    with Hyprland one login away.
 

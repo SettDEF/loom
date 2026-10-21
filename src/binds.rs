@@ -58,6 +58,8 @@ pub struct Binds {
     taken: HashSet<u32>,
     /// mouse and other binds loom does not handle yet (counted, said once)
     pub skipped: usize,
+    /// the last key() matched a repeating bind (binde): loom repeats it while the key is held
+    pub last_repeat: bool,
 }
 
 fn mods_of(s: &str) -> u8 {
@@ -222,6 +224,8 @@ impl Binds {
         let mut out: Option<Vec<String>> = None;
         let mut consume = false;
         let mut matched = false;
+        self.last_repeat = false;
+        let mut rep = false;
         for key in [Key::Sym(sym), Key::Code(code)] {
             let own = match key {
                 Key::Sym(s) => self_mod(s),
@@ -239,9 +243,11 @@ impl Binds {
                 }
                 matched = true;
                 consume |= !b.flags.non_consuming;
+                rep |= b.flags.repeat && pressed;
                 out.get_or_insert_with(Vec::new).push(b.action.clone());
             }
         }
+        self.last_repeat = rep;
         // a submap's catchall takes what nothing else did
         if !matched && pressed {
             for &i in &t.catchall {
@@ -315,7 +321,13 @@ impl crate::state::Loom {
             let sym = h.raw_latin_sym_or_raw_current_sym().map_or(0, |s| s.raw());
             let (acts, consume) = data.binds.key(h.raw_code().raw(), sym, mask(mods), pressed, false);
             if let Some(a) = acts {
+                if data.binds.last_repeat {
+                    data.start_repeat(h.raw_code().raw(), a.clone());
+                }
                 data.bind_actions.extend(a);
+            }
+            if !pressed && data.repeat.as_ref().is_some_and(|r| r.0 == h.raw_code().raw()) {
+                data.repeat = None;
             }
             if consume {
                 smithay::input::keyboard::FilterResult::Intercept(())
@@ -331,5 +343,27 @@ impl crate::state::Loom {
                 }
             }
         }
+    }
+}
+
+impl crate::state::Loom {
+    /// A held repeating bind (binde, vim mode's h j k l): run again after the keyboard's repeat
+    /// delay, then at its rate, until the key is let go.
+    pub fn start_repeat(&mut self, code: u32, actions: Vec<String>) {
+        self.repeat_gen += 1;
+        let this = self.repeat_gen;
+        self.repeat = Some((code, actions));
+        let Some(h) = self.loop_handle.clone() else { return };
+        use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
+        let _ = h.insert_source(Timer::from_duration(std::time::Duration::from_millis(600)), move |_, _, s: &mut crate::state::Loom| {
+            if s.repeat_gen != this {
+                return TimeoutAction::Drop;
+            }
+            let Some((_, acts)) = s.repeat.clone() else { return TimeoutAction::Drop };
+            for a in &acts {
+                s.hypr_dispatch(a);
+            }
+            TimeoutAction::ToDuration(std::time::Duration::from_millis(40))
+        });
     }
 }

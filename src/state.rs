@@ -79,6 +79,12 @@ pub struct Loom {
     pub bind_actions: Vec<String>,
     /// the fullscreen window, if one is
     pub fullscreen: Option<Window>,
+    /// the repeating bind held (its key, its actions), its timer's generation; the event loop
+    pub repeat: Option<(u32, Vec<String>)>,
+    pub repeat_gen: u64,
+    pub loop_handle: Option<smithay::reexports::calloop::LoopHandle<'static, Loom>>,
+    /// the special workspace (Super+S) shown over the active one
+    pub special_shown: bool,
     /// the Wayland socket programs connect to (WAYLAND_DISPLAY for what loom starts)
     pub socket_name: Option<String>,
     /// Xwayland's window manager once it runs, its display (DISPLAY=:N for what loom starts)
@@ -121,6 +127,10 @@ impl Loom {
             binds: Default::default(),
             bind_actions: Vec::new(),
             fullscreen: None,
+            repeat: None,
+            repeat_gen: 0,
+            loop_handle: None,
+            special_shown: false,
             socket_name: None,
             xwm: None,
             x_display: None,
