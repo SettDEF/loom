@@ -23,9 +23,7 @@ pub struct Managed {
     pub pinned: bool,
 }
 
-/// Hyprland's default gaps: between windows, and to the screen's edge.
-const GAPS_IN: i32 = 5;
-const GAPS_OUT: i32 = 10;
+// the gaps come from the settings (config.rs: Hyprland's general:gaps_in / gaps_out, init.lua)
 
 /// Hyprland's id for the special workspace ("special:special").
 pub const SPECIAL: i32 = -98;
@@ -94,7 +92,8 @@ impl Loom {
         let mut area = layer_map_for_output(&output).non_exclusive_zone();
         area.loc += geo.loc;
         // gaps as Hyprland's: the edge gets gaps_out, between two windows twice gaps_in
-        let inset = GAPS_OUT - GAPS_IN;
+        let (gin, gout) = (self.look.gaps_in.round() as i32, self.look.gaps_out.round() as i32);
+        let inset = gout - gin;
         let area = Rectangle::new((area.loc.x + inset, area.loc.y + inset).into(), (area.size.w - 2 * inset, area.size.h - 2 * inset).into());
         let now = std::time::Instant::now();
         self.tile(self.active_ws, area, false);
@@ -130,7 +129,7 @@ impl Loom {
         let suit = self.layouts.of(&ws.to_string());
         let rects: Vec<Rectangle<i32, Logical>> = crate::layouts::arrange(tiled.len(), area, &suit)
             .into_iter()
-            .map(|r| Rectangle::new((r.loc.x + GAPS_IN, r.loc.y + GAPS_IN).into(), ((r.size.w - 2 * GAPS_IN).max(1), (r.size.h - 2 * GAPS_IN).max(1)).into()))
+            .map(|r| { let g = self.look.gaps_in.round() as i32; Rectangle::new((r.loc.x + g, r.loc.y + g).into(), ((r.size.w - 2 * g).max(1), (r.size.h - 2 * g).max(1)).into()) })
             .collect();
         let now = std::time::Instant::now();
         for ((win, addr), rect) in tiled.into_iter().zip(rects) {
@@ -520,7 +519,8 @@ impl Loom {
         let geo = self.space.output_geometry(&output)?;
         let mut area = layer_map_for_output(&output).non_exclusive_zone();
         area.loc += geo.loc;
-        let inset = GAPS_OUT - GAPS_IN;
+        let (gin, gout) = (self.look.gaps_in.round() as i32, self.look.gaps_out.round() as i32);
+        let inset = gout - gin;
         Some(Rectangle::new((area.loc.x + inset, area.loc.y + inset).into(), (area.size.w - 2 * inset, area.size.h - 2 * inset).into()))
     }
 

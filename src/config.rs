@@ -19,11 +19,14 @@ pub struct Look {
     pub rounding: f32,
     /// the corner curve: 2 = a circle, higher = squarer (Hyprland's decoration:rounding_power)
     pub rounding_power: f32,
+    /// between two windows, and to the screen's edge (Hyprland's general:gaps_in, gaps_out)
+    pub gaps_in: f32,
+    pub gaps_out: f32,
 }
 
 impl Default for Look {
     fn default() -> Self {
-        Look { rounding: 0.0, rounding_power: 2.0 }
+        Look { rounding: 0.0, rounding_power: 2.0, gaps_in: 5.0, gaps_out: 20.0 }
     }
 }
 
@@ -77,7 +80,7 @@ pub fn from_hyprland() -> Look {
     let v = hyprland_values(&home().join(".config/hypr/hyprland.conf"));
     let num = |k: &str, d: f32| v.get(k).and_then(|s| s.parse().ok()).unwrap_or(d);
     let d = Look::default();
-    Look { rounding: num("decoration:rounding", d.rounding), rounding_power: num("decoration:rounding_power", d.rounding_power) }
+    Look { rounding: num("decoration:rounding", d.rounding), rounding_power: num("decoration:rounding_power", d.rounding_power), gaps_in: num("general:gaps_in", d.gaps_in), gaps_out: num("general:gaps_out", d.gaps_out) }
 }
 
 /// Hyprland's defaults with init.lua run over them; the error, if the file has one.
@@ -98,10 +101,14 @@ fn run_lua(src: &str, base: &Look) -> Result<Look, String> {
     let opt = lua.create_table().map_err(e)?;
     opt.set("rounding", base.rounding).map_err(e)?;
     opt.set("rounding_power", base.rounding_power).map_err(e)?;
+    opt.set("gaps_in", base.gaps_in).map_err(e)?;
+    opt.set("gaps_out", base.gaps_out).map_err(e)?;
     // what Hyprland's config says, to read (loom.hyprland.rounding)
     let hypr = lua.create_table().map_err(e)?;
     hypr.set("rounding", base.rounding).map_err(e)?;
     hypr.set("rounding_power", base.rounding_power).map_err(e)?;
+    hypr.set("gaps_in", base.gaps_in).map_err(e)?;
+    hypr.set("gaps_out", base.gaps_out).map_err(e)?;
     loom.set("hyprland", hypr).map_err(e)?;
     loom.set("opt", opt.clone()).map_err(e)?;
     // loom.setup { key = value, … }: the same as setting each loom.opt.key
@@ -126,7 +133,12 @@ fn run_lua(src: &str, base: &Look) -> Result<Look, String> {
             other => Err(format!("loom.opt.{k} must be a number, not {}", other.type_name())),
         }
     };
-    Ok(Look { rounding: get("rounding", base.rounding)?.max(0.0), rounding_power: get("rounding_power", base.rounding_power)?.clamp(1.0, 10.0) })
+    Ok(Look {
+        rounding: get("rounding", base.rounding)?.max(0.0),
+        rounding_power: get("rounding_power", base.rounding_power)?.clamp(1.0, 10.0),
+        gaps_in: get("gaps_in", base.gaps_in)?.max(0.0),
+        gaps_out: get("gaps_out", base.gaps_out)?.max(0.0),
+    })
 }
 
 impl crate::state::Loom {
@@ -160,9 +172,13 @@ impl crate::state::Loom {
             Some(e) => eprintln!("loom: init.lua: {e} (the last good settings stay)"),
             None => {
                 if look != self.look {
-                    eprintln!("loom: settings: rounding {} power {}", look.rounding, look.rounding_power);
+                    eprintln!("loom: settings: rounding {} power {} gaps {}/{}", look.rounding, look.rounding_power, look.gaps_in, look.gaps_out);
+                    let gaps = (look.gaps_in, look.gaps_out) != (self.look.gaps_in, self.look.gaps_out);
                     self.look = look;
                     self.dirty = true;
+                    if gaps {
+                        self.relayout();
+                    }
                 }
             }
         }
@@ -175,7 +191,7 @@ mod tests {
 
     #[test]
     fn lua_sets_options_both_ways() {
-        let base = Look { rounding: 18.0, rounding_power: 2.0 };
+        let base = Look { rounding: 18.0, rounding_power: 2.0, gaps_in: 4.0, gaps_out: 5.0 };
         assert_eq!(run_lua("loom.opt.rounding = 12", &base).unwrap().rounding, 12.0);
         let l = run_lua("loom.setup { rounding = 6, rounding_power = 3 }", &base).unwrap();
         assert_eq!((l.rounding, l.rounding_power), (6.0, 3.0));

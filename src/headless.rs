@@ -9,7 +9,7 @@ use std::{cell::RefCell, rc::Rc};
 use smithay::{
     backend::{
         allocator::Fourcc,
-        renderer::{damage::OutputDamageTracker, gles::GlesTexture, pixman::PixmanRenderer, Bind, ExportMem, Offscreen, Renderer, Texture},
+        renderer::{damage::OutputDamageTracker, gles::GlesTexture, pixman::PixmanRenderer, Bind, ExportMem, Offscreen, Texture},
     },
     output::{Mode, Output, PhysicalProperties, Scale, Subpixel},
     reexports::{
