@@ -96,6 +96,7 @@ where
     R::TextureId: Texture + Clone + 'static,
     T: 'static,
 {
+    crate::screencopy::run::<R, T>(state, renderer);
     if !state.captures_ready() {
         return;
     }
@@ -151,6 +152,6 @@ impl Loom {
         self.commit_count.get(&c.addr).copied().unwrap_or(0) != self.captured_at.get(&key).copied().unwrap_or(u64::MAX)
     }
     pub fn captures_ready(&self) -> bool {
-        self.captures.iter().any(|c| self.capture_ready(c))
+        !self.screen_captures.is_empty() || self.captures.iter().any(|c| self.capture_ready(c))
     }
 }

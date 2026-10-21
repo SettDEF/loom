@@ -15,6 +15,7 @@ mod foreign;
 mod input;
 mod layouts;
 mod pointer;
+mod screencopy;
 mod nested;
 mod render;
 mod state;

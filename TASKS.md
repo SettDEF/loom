@@ -74,7 +74,8 @@ The milestones of [PLAN.md](PLAN.md), each step a line; ticked when it works wit
 - [ ] loom's own X server (Rust): core protocol + MIT-SHM + XKB + RandR; xterm, xeyes, xclock run without Xwayland
 - [ ] own X server grows: Render, Composite, XFixes, Damage, XInput2, then DRI3 + Present + GLX (games)
 - [ ] per-app setting: which X server a program gets (own one when it can, Xwayland otherwise)
-- [ ] screencopy (wlr-screencopy, ext-image-copy-capture): portals, OBS, Snip
+- [x] wlr-screencopy (grim, the shell's region selector, Snip): whole output or a region, at the output's scale, pixel-identical to the screen
+- [ ] ext-image-copy-capture (portals, OBS)
 - [ ] ext-session-lock (the lock screen), idle notify / inhibit
 - [ ] input method, tablet v2 (the pen), gestures, gamma
 

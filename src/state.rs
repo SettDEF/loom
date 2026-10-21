@@ -78,6 +78,8 @@ pub struct Loom {
     pub foreign: crate::foreign::Foreign,
     /// window copies asked for (capture.rs), drawn on the next frame
     pub captures: Vec<crate::capture::Capture>,
+    /// screen copies asked for (screencopy.rs)
+    pub screen_captures: Vec<crate::screencopy::ScreenCapture>,
     /// commits per window, and the count each client's last copy saw (copies wait for a change)
     pub commit_count: std::collections::HashMap<u64, u64>,
     pub captured_at: std::collections::HashMap<(Option<smithay::reexports::wayland_server::backend::ClientId>, u64), u64>,
@@ -125,6 +127,7 @@ impl Loom {
         crate::foreign::init(&dh);
         crate::hypr_proto::init_mapping(&dh);
         crate::capture::init(&dh);
+        crate::screencopy::init(&dh);
         Loom {
             compositor_state: CompositorState::new::<Loom>(&dh),
             xdg_shell_state: XdgShellState::new::<Loom>(&dh),
@@ -151,6 +154,7 @@ impl Loom {
             proto: Default::default(),
             foreign: Default::default(),
             captures: Vec::new(),
+            screen_captures: Vec::new(),
             commit_count: Default::default(),
             captured_at: Default::default(),
             dmabuf: None,

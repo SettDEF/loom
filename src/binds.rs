@@ -64,6 +64,8 @@ pub struct Binds {
     pub skipped: usize,
     /// the last key() matched a repeating bind (binde): loom repeats it while the key is held
     pub last_repeat: bool,
+    /// the config's `env = NAME,VALUE` lines, in order (set for what loom starts on a console)
+    pub env: Vec<(String, String)>,
 }
 
 fn mods_of(s: &str) -> u8 {
@@ -173,6 +175,10 @@ impl Binds {
                 let p = expand(v, vars).replace('~', &std::env::var("HOME").unwrap_or_default());
                 let p = if Path::new(&p).is_absolute() { PathBuf::from(p) } else { dir.join(p) };
                 self.read(&p, vars, submap, depth + 1);
+            } else if k == "env" {
+                if let Some((name, val)) = expand(v, vars).split_once(',') {
+                    self.env.push((name.trim().to_string(), val.trim().to_string()));
+                }
             } else if k == "submap" {
                 *submap = v.to_string();
             } else if let Some(flags) = k.strip_prefix("bind") {
@@ -410,5 +416,18 @@ impl Binds {
             out.get_or_insert_with(Vec::new).push(b.action.clone());
         }
         (out, consume)
+    }
+}
+
+#[cfg(test)]
+mod env_tests {
+    #[test]
+    fn env_lines_read_with_vars() {
+        let dir = std::env::temp_dir().join(format!("loom-env-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("hyprland.conf"), "env = QT_QPA_PLATFORMTHEME,qt6ct\n$c = Vimix\nenv = XCURSOR_THEME,$c # comment\n").unwrap();
+        let b = super::Binds::load(&dir.join("hyprland.conf"));
+        std::fs::remove_dir_all(&dir).ok();
+        assert_eq!(b.env, vec![("QT_QPA_PLATFORMTHEME".to_string(), "qt6ct".to_string()), ("XCURSOR_THEME".to_string(), "Vimix".to_string())]);
     }
 }

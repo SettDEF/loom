@@ -251,6 +251,14 @@ pub fn run(opts: Options) -> Result<(), Box<dyn std::error::Error>> {
     state.socket_name = Some(socket_name.clone());
     let conf = PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".config/hypr/hyprland.conf");
     state.binds = crate::binds::Binds::load(&conf);
+    // the config's `env =` lines, as Hyprland sets them for everything it starts (themes, cursor …)
+    for (k, v) in state.binds.env.clone() {
+        if !matches!(k.as_str(), "WAYLAND_DISPLAY" | "DISPLAY" | "HYPRLAND_INSTANCE_SIGNATURE" | "XDG_RUNTIME_DIR") {
+            // Safety: one thread so far (before the event loop runs)
+            unsafe { std::env::set_var(&k, &v) };
+        }
+    }
+    eprintln!("loom: {} env lines from the Hyprland config", state.binds.env.len());
     state.hypr = Some(crate::hypr_ipc::start(&event_loop.handle())?);
     match crate::xwayland::start(&event_loop.handle(), &mut state) {
         Ok(n) => state.x_display = Some(n),
@@ -295,6 +303,10 @@ impl Loom {
         let Some(t) = self.tty.as_ref() else { return };
         if self.frames_owed && !t.pending && t.owed_at.elapsed() >= t.period {
             self.send_frames();
+        }
+        // screen or window copies asked for (grim, previews): drawn even when nothing else changed
+        if self.captures_ready() {
+            crate::capture::run::<_, smithay::backend::renderer::gles::GlesTexture>(self, &mut *renderer.borrow_mut());
         }
         let Some(t) = self.tty.as_ref() else { return };
         if !t.active || t.pending || !(self.dirty || self.animating()) {
