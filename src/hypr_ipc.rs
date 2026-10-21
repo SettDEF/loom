@@ -35,6 +35,17 @@ pub fn start(handle: &LoopHandle<'static, Loom>) -> Result<HyprIpc, Box<dyn std:
     let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
     let signature = format!("loom_{}_{secs}", std::process::id());
     let dir = PathBuf::from(runtime).join("hypr").join(&signature);
+    // folders of loom runs that died without cleaning up (killed tests): their pid is gone
+    if let Ok(rd) = std::fs::read_dir(dir.parent().unwrap_or(&dir)) {
+        for e in rd.flatten() {
+            let n = e.file_name().to_string_lossy().to_string();
+            if let Some(pid) = n.strip_prefix("loom_").and_then(|r| r.split('_').next()).and_then(|p| p.parse::<u32>().ok()) {
+                if !std::path::Path::new(&format!("/proc/{pid}")).exists() {
+                    let _ = std::fs::remove_dir_all(e.path());
+                }
+            }
+        }
+    }
     std::fs::create_dir_all(&dir)?;
     let requests = UnixListener::bind(dir.join(".socket.sock"))?;
     requests.set_nonblocking(true)?;
