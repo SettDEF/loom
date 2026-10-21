@@ -1,6 +1,6 @@
 //! What one output shows, front to back: the layers above windows (overlay, top), the windows
 //! topmost first (each where its animation has it, faded and scaled), the layers below (bottom,
-//! background). Any renderer: pixman headless, GL on hardware later.
+//! background). Any renderer (pixman headless, GL nested and on hardware), at the output's scale.
 
 use std::time::Instant;
 
@@ -23,13 +23,15 @@ where
     R::TextureId: Clone + Texture + 'static,
 {
     let mut out = Vec::new();
+    // the output's scale (1.6 on the Z13 panel): positions are logical, drawing is in pixels
+    let os = output.current_scale().fractional_scale();
     let map = layer_map_for_output(output);
     let layers = |out: &mut Vec<WaylandSurfaceRenderElement<R>>, renderer: &mut R, which: &[Layer]| {
         for l in which {
             for layer in map.layers_on(*l).rev() {
                 let Some(geo) = map.layer_geometry(layer) else { continue };
-                let loc: Point<i32, Physical> = geo.loc.to_physical(1);
-                out.extend(AsRenderElements::<R>::render_elements::<WaylandSurfaceRenderElement<R>>(layer, renderer, loc, Scale::from(1.0), state.opacity_of(layer.wl_surface())));
+                let loc: Point<i32, Physical> = geo.loc.to_f64().to_physical(os).to_i32_round();
+                out.extend(AsRenderElements::<R>::render_elements::<WaylandSurfaceRenderElement<R>>(layer, renderer, loc, Scale::from(os), state.opacity_of(layer.wl_surface())));
             }
         }
     };
@@ -48,8 +50,8 @@ where
         let (sw, sh) = (geo.size.w as f64, geo.size.h as f64);
         let x = x + sw * (1.0 - scale) / 2.0 - geo.loc.x as f64 * scale;
         let y = y + sh * (1.0 - scale) / 2.0 - geo.loc.y as f64 * scale;
-        let loc: Point<i32, Physical> = Point::from((x.round() as i32, y.round() as i32));
-        out.extend(AsRenderElements::<R>::render_elements::<WaylandSurfaceRenderElement<R>>(w, renderer, loc, Scale::from(scale), alpha as f32 * smithay::wayland::seat::WaylandFocus::wl_surface(w).map_or(1.0, |s| state.opacity_of(&s))));
+        let loc: Point<i32, Physical> = Point::from(((x * os).round() as i32, (y * os).round() as i32));
+        out.extend(AsRenderElements::<R>::render_elements::<WaylandSurfaceRenderElement<R>>(w, renderer, loc, Scale::from(scale * os), alpha as f32 * smithay::wayland::seat::WaylandFocus::wl_surface(w).map_or(1.0, |s| state.opacity_of(&s))));
     }
     layers(&mut out, renderer, &[Layer::Bottom, Layer::Background]);
     out

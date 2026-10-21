@@ -42,6 +42,8 @@ pub struct Options {
     pub binds: Option<PathBuf>,
     /// draw on the GPU (surfaceless) and offer linux-dmabuf, as on a real screen (--gpu)
     pub gpu: bool,
+    /// the output's scale (--scale 1.6)
+    pub scale: f64,
 }
 
 pub fn run(opts: Options) -> Result<(), Box<dyn std::error::Error>> {
@@ -82,7 +84,9 @@ pub fn run(opts: Options) -> Result<(), Box<dyn std::error::Error>> {
     let output = Output::new("HEADLESS-1".into(), PhysicalProperties { size: (0, 0).into(), subpixel: Subpixel::Unknown, make: "loom".into(), model: "headless".into() });
     let _global = output.create_global::<Loom>(&state.dh);
     let mode = Mode { size: (w, h).into(), refresh: 60_000 };
-    output.change_current_state(Some(mode), Some(Transform::Normal), Some(Scale::Integer(1)), Some((0, 0).into()));
+    // the scale the real screen would have (--scale 1.6: the Z13 panel), logical size = pixels / scale
+    let scale = if (opts.scale - 1.0).abs() < 1e-6 { Scale::Integer(1) } else { Scale::Fractional(opts.scale) };
+    output.change_current_state(Some(mode), Some(Transform::Normal), Some(scale), Some((0, 0).into()));
     output.set_preferred(mode);
     state.space.map_output(&output, (0, 0));
     state.output = Some(output.clone());

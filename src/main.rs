@@ -25,7 +25,7 @@ use std::{path::PathBuf, time::Duration};
 
 fn main() {
     let mut args = std::env::args().skip(1);
-    let mut opts = headless::Options { size: (1280, 720), snapshot: None, wait: Duration::from_millis(2000), socket: None, run: Vec::new(), script: Vec::new(), script_at: Duration::from_millis(1200), record: None, binds: None, gpu: false };
+    let mut opts = headless::Options { size: (1280, 720), snapshot: None, wait: Duration::from_millis(2000), socket: None, run: Vec::new(), script: Vec::new(), script_at: Duration::from_millis(1200), record: None, binds: None, gpu: false, scale: 1.0 };
     let mut headless = false;
     let mut nested = false;
     while let Some(a) = args.next() {
@@ -43,6 +43,7 @@ fn main() {
             "--socket" => opts.socket = args.next(),
             "--binds" => opts.binds = args.next().map(PathBuf::from),
             "--gpu" => opts.gpu = true,
+            "--scale" => opts.scale = args.next().and_then(|v| v.parse().ok()).unwrap_or(1.0),
             "--record" => {
                 opts.record = args.next().map(PathBuf::from);
                 if let Some(d) = &opts.record {
