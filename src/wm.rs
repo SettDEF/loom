@@ -56,6 +56,7 @@ impl Loom {
         self.relayout();
         self.focus_window(&window);
         self.hypr_event(&format!("openwindow>>{addr:x},{},{},{}", self.active_ws, self.class_of(&window), self.title_of(&window)));
+        self.foreign_opened(addr);
     }
 
     /// A window gone: off its workspace, the rest tiled again, the focus to the next one there.
@@ -65,6 +66,7 @@ impl Loom {
         self.space.unmap_elem(window);
         self.anims.remove(&m.addr);
         self.hypr_event(&format!("closewindow>>{:x}", m.addr));
+        self.foreign_closed(m.addr);
         if self.focused.as_ref() == Some(window) {
             self.focused = None;
             if let Some(next) = self.managed.iter().rev().find(|m| m.ws == self.active_ws).map(|m| m.window.clone()) {
@@ -230,6 +232,7 @@ impl Loom {
         let title = self.title_of(w);
         self.hypr_event(&format!("windowtitle>>{addr:x}"));
         self.hypr_event(&format!("windowtitlev2>>{addr:x},{title}"));
+        self.foreign_changed(addr);
         if self.focused.as_ref() == Some(w) {
             self.hypr_event(&format!("activewindow>>{},{title}", self.class_of(w)));
         }
@@ -286,6 +289,7 @@ impl Loom {
         let Some(w) = self.focused.clone() else { return };
         let on = self.fullscreen.as_ref() != Some(&w);
         self.fullscreen = on.then(|| w.clone());
+        self.foreign_all_changed();
         self.relayout();
     }
 }

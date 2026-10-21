@@ -8,6 +8,7 @@ mod hypr_ipc;
 mod hypr_proto;
 mod binds;
 mod focus;
+mod foreign;
 mod input;
 mod layouts;
 mod nested;

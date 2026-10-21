@@ -74,6 +74,8 @@ pub struct Loom {
     pub layouts: crate::layouts::Layouts,
     /// Hyprland's Wayland protocols' state (hypr_proto.rs)
     pub proto: crate::hypr_proto::HyprProto,
+    /// the docks' window list (foreign.rs)
+    pub foreign: crate::foreign::Foreign,
     /// the user's Hyprland binds (binds.rs); the actions a key just matched
     pub binds: crate::binds::Binds,
     pub bind_actions: Vec<String>,
@@ -104,6 +106,7 @@ impl Loom {
         seat.add_keyboard(Default::default(), 600, 25).expect("keyboard");
         seat.add_pointer();
         crate::hypr_proto::init(&dh);
+        crate::foreign::init(&dh);
         Loom {
             compositor_state: CompositorState::new::<Loom>(&dh),
             xdg_shell_state: XdgShellState::new::<Loom>(&dh),
@@ -128,6 +131,7 @@ impl Loom {
             hypr: None,
             layouts: crate::layouts::Layouts::load(),
             proto: Default::default(),
+            foreign: Default::default(),
             binds: Default::default(),
             bind_actions: Vec::new(),
             fullscreen: None,
@@ -186,6 +190,7 @@ impl Loom {
             let addr = self.managed_of(window).map(|m| m.addr).unwrap_or(0);
             self.hypr_event(&format!("activewindow>>{},{}", self.class_of(window), self.title_of(window)));
             self.hypr_event(&format!("activewindowv2>>{addr:x}"));
+            self.foreign_all_changed();
         }
         self.space.raise_element(window, true);
         for w in self.space.elements() {
