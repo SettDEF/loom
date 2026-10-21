@@ -10,7 +10,7 @@ The milestones of [PLAN.md](PLAN.md), each step a line; ticked when it works wit
 - [x] keyboard and pointer input in the headless backend (scripted: `--keys`, `--click`), focus follows clicks
 - [x] several windows (two alacritty side by side in one picture)
 - [x] popups (xdg_popup: placed from their positioner; a Quickshell PopupWindow shows where anchored)
-- [ ] nested backend (winit) for looking at it live, only when asked
+- [x] nested backend (winit, GL, dmabuf) for looking at it live: zash runs in it with the real keyboard and mouse
 
 ## 1. Windows
 

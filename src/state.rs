@@ -54,6 +54,10 @@ pub struct Loom {
     pub anims: std::collections::HashMap<smithay::reexports::wayland_server::backend::ObjectId, crate::anim::WindowAnim>,
     /// something changed since the last frame (a commit, a move): draw again
     pub dirty: bool,
+    /// the nested backend's window and renderer (None headless)
+    pub nested: Option<crate::nested::Nested>,
+    /// where the pointer is (compositor space)
+    pub pointer_at: smithay::utils::Point<f64, smithay::utils::Logical>,
     /// frames drawn so far (a test checks an idle desktop draws none)
     pub frames: u64,
     /// menus and other popups, with the window they belong to
@@ -82,6 +86,8 @@ impl Loom {
             anims: Default::default(),
             dirty: true,
             frames: 0,
+            nested: None,
+            pointer_at: (0.0, 0.0).into(),
             output: None,
             start: Instant::now(),
             signal,
@@ -122,6 +128,26 @@ impl Loom {
             self.space.map_element(win, rect.loc, false);
         }
         self.dirty = true;
+    }
+
+    /// The surface under a point, and where it is: the layers above windows, the windows, the
+    /// layers below (a bar, a dock and the desktop take the pointer too).
+    pub fn surface_at(&self, at: smithay::utils::Point<f64, smithay::utils::Logical>) -> Option<(WlSurface, smithay::utils::Point<f64, smithay::utils::Logical>)> {
+        use smithay::wayland::shell::wlr_layer::Layer as L;
+        let output = self.output.as_ref()?;
+        let map = layer_map_for_output(output);
+        let layer_hit = |which: &[L]| {
+            which.iter().find_map(|l| {
+                let layer = map.layer_under(*l, at)?;
+                let geo = map.layer_geometry(layer)?;
+                layer.surface_under(at - geo.loc.to_f64(), WindowSurfaceType::ALL).map(|(s, loc)| (s, (loc + geo.loc).to_f64()))
+            })
+        };
+        layer_hit(&[L::Overlay, L::Top])
+            .or_else(|| {
+                self.space.element_under(at).and_then(|(w, loc)| w.surface_under(at - loc.to_f64(), WindowSurfaceType::ALL).map(|(s, sloc)| (s, (sloc + loc).to_f64())))
+            })
+            .or_else(|| layer_hit(&[L::Bottom, L::Background]))
     }
 
     /// A window's animation, if it has one.
