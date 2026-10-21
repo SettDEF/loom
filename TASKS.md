@@ -7,8 +7,8 @@ The milestones of [PLAN.md](PLAN.md), each step a line; ticked when it works wit
 
 - [x] headless backend: pixman, frames at 60 Hz, `--snapshot` PNG (alacritty shows in it)
 - [x] wl_compositor, wl_subcompositor, wl_shm, xdg-shell, wl_seat, data device, wl_output, xdg-output (wayland-info lists them)
-- [ ] keyboard and pointer input in the headless backend (scripted: `--keys`, `--click`), focus follows clicks
-- [ ] several windows (two alacritty side by side in one picture)
+- [x] keyboard and pointer input in the headless backend (scripted: `--keys`, `--click`), focus follows clicks
+- [x] several windows (two alacritty side by side in one picture)
 - [ ] popups (xdg_popup: alacritty's / zash's menus)
 - [ ] nested backend (winit) for looking at it live, only when asked
 

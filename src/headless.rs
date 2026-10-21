@@ -34,6 +34,9 @@ pub struct Options {
     pub wait: Duration,
     pub socket: Option<String>,
     pub run: Vec<String>,
+    /// scripted input (--keys, --click), one step every 25 ms from `script_at`
+    pub script: Vec<crate::input::Action>,
+    pub script_at: Duration,
 }
 
 pub fn run(opts: Options) -> Result<(), Box<dyn std::error::Error>> {
@@ -90,6 +93,18 @@ pub fn run(opts: Options) -> Result<(), Box<dyn std::error::Error>> {
             state.signal.stop();
         }
         TimeoutAction::ToDuration(Duration::from_millis(16))
+    })?;
+
+    // the script: one step every 25 ms once its time has come
+    let mut script: std::collections::VecDeque<crate::input::Action> = opts.script.iter().cloned().collect();
+    let script_at = opts.script_at;
+    event_loop.handle().insert_source(Timer::from_duration(Duration::from_millis(25)), move |_, _, state: &mut Loom| {
+        if state.start.elapsed() >= script_at {
+            if let Some(a) = script.pop_front() {
+                state.act(&a);
+            }
+        }
+        if script.is_empty() && state.start.elapsed() >= script_at { TimeoutAction::Drop } else { TimeoutAction::ToDuration(Duration::from_millis(25)) }
     })?;
 
     // what to run in it

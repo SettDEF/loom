@@ -31,6 +31,7 @@ use smithay::{
 };
 
 use smithay::backend::renderer::utils::on_commit_buffer_handler;
+use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
 
 pub struct Loom {
     pub dh: DisplayHandle,
@@ -41,7 +42,8 @@ pub struct Loom {
     pub shm_state: ShmState,
     pub seat_state: SeatState<Loom>,
     pub data_device_state: DataDeviceState,
-    pub output_manager_state: OutputManagerState,
+    /// kept alive: it serves wl_output and xdg-output
+    pub _output_manager_state: OutputManagerState,
     pub seat: Seat<Loom>,
     /// the windows and where they are
     pub space: Space<Window>,
@@ -60,7 +62,7 @@ impl Loom {
             xdg_shell_state: XdgShellState::new::<Loom>(&dh),
             shm_state: ShmState::new::<Loom>(&dh, vec![]),
             data_device_state: DataDeviceState::new::<Loom>(&dh),
-            output_manager_state: OutputManagerState::new_with_xdg_output::<Loom>(&dh),
+            _output_manager_state: OutputManagerState::new_with_xdg_output::<Loom>(&dh),
             seat_state,
             seat,
             space: Space::default(),
@@ -88,6 +90,30 @@ impl Loom {
                 }
             }
             self.space.map_element(win, rect.loc, false);
+        }
+    }
+
+    /// This window has the keyboard and shows as active (xdg activated); the others not.
+    pub fn focus_window(&mut self, window: &Window) {
+        self.space.raise_element(window, true);
+        for w in self.space.elements() {
+            let Some(t) = w.toplevel() else { continue };
+            let on = w == window;
+            t.with_pending_state(|s| {
+                if on {
+                    s.states.set(xdg_toplevel::State::Activated);
+                } else {
+                    s.states.unset(xdg_toplevel::State::Activated);
+                }
+            });
+            // sent only when it differs from the last configure
+            if t.is_initial_configure_sent() {
+                t.send_pending_configure();
+            }
+        }
+        if let Some(t) = window.toplevel() {
+            let kb = self.seat.get_keyboard().expect("keyboard");
+            kb.set_focus(self, Some(t.wl_surface().clone()), Serial::from(0));
         }
     }
 
@@ -131,11 +157,11 @@ impl XdgShellHandler for Loom {
     }
     fn new_toplevel(&mut self, surface: ToplevelSurface) {
         let window = Window::new_wayland_window(surface.clone());
-        self.space.map_element(window, (0, 0), true);
+        self.space.map_element(window.clone(), (0, 0), true);
         self.relayout();
         // the newest window has the keyboard
-        let kb = self.seat.get_keyboard().expect("keyboard");
-        kb.set_focus(self, Some(surface.wl_surface().clone()), Serial::from(0));
+        let _ = surface;
+        self.focus_window(&window);
     }
     fn toplevel_destroyed(&mut self, surface: ToplevelSurface) {
         let gone = self.space.elements().find(|w| w.toplevel() == Some(&surface)).cloned();
