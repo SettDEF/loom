@@ -40,10 +40,23 @@ Hyprland's internals on every release. loom is built for both from the start.
    dispatch, keyword, getoption, devices; socket2 events), hyprland-global-shortcuts,
    hyprland-focus-grab, hyprland-toplevel-export, hyprland-ctm-control, hyprland-surface,
    hyprland-lock-notify. Test: the `ii` shell runs on loom headless, its log clean.
-3. **KDE compatibility** — kde_output_device_v2 (registry), kde_output_management_v2,
-   kde_output_order_v1, kde_primary_output_v1: kscreen-doctor and System Settings › Display
-   read and change the monitors. Then plasma-window-management, org_kde_kwin_blur,
-   org_kde_kwin_server_decoration(_palette), appmenu, kde-screen-edge.
+3. **KDE compatibility** — every page of KDE's System Settings works on loom (the user, 2026-10-21).
+   The Wayland side: kde_output_device_v2 (registry), kde_output_management_v2,
+   kde_output_order_v1, kde_primary_output_v1 (Display), plasma-window-management,
+   org_kde_kwin_blur, server decoration (+ palette), appmenu, kde-screen-edge,
+   org_kde_plasma_virtual_desktop. The D-Bus side, as KWin answers it (survey of the 68 pages):
+   `org.kde.KWin` (reconfigure, window info for Window Rules), `org.kde.KWin.InputDevice(Manager)`
+   (Mouse, Touchpad, Touchscreen, Tablet), `org.kde.KWin.NightLight` (Night Light),
+   `org.kde.kwin.Effects` and `org.kde.kwin.Scripting` (Effects, KWin Scripts),
+   `org.kde.KWin.VirtualDesktopManager` (Virtual Desktops), `org.kde.kwin.VirtualKeyboard`,
+   decorations (KDecoration themes drawn by loom), XWayland settings; and KWin's files the
+   pages write (kwinrc, kxkbrc keyboard layouts, kcminputrc, kwinrulesrc), read again on
+   reconfigure.
+   **Hardware goes through knurl**: loom owns the libinput settings (acceleration, scrolling,
+   tap, left-handed) because it owns the devices; knurl (the user's hardware app, `knurl serve`)
+   stays the place for what devices are (names, batteries, DPI, backlight with its 98% cap,
+   gestures, the pen layer). KDE's pages, knurl's window and the shell all read and write the
+   same settings through loom, and loom asks knurl for what is knurl's.
 4. **Real hardware** — udev/DRM/KMS, libseat session, libinput, multi-monitor, hotplug, VRR,
    10-bit and HDR where the panel has it, DPMS, the Z13 panel's backlight cap (98%).
 5. **The rest of a day** — XWayland (games, Steam), screencopy (wlr-screencopy,

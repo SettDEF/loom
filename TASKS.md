@@ -35,9 +35,17 @@ The milestones of [PLAN.md](PLAN.md), each step a line; ticked when it works wit
 
 - [ ] kde_output_device_v2 + registry (`kscreen-doctor -o` lists the outputs)
 - [ ] kde_output_management_v2 (`kscreen-doctor output.1.scale.1.5` changes it)
-- [ ] kde_output_order_v1, kde_primary_output_v1
-- [ ] System Settings › Display shows and changes the monitors
+- [ ] kde_output_order_v1, kde_primary_output_v1; System Settings › Display shows and changes the monitors
+- [ ] Night Light (org.kde.KWin.NightLight; the shell's night light and KDE's one thing)
+- [ ] Mouse, Touchpad, Touchscreen (org.kde.KWin.InputDevice on loom's libinput; knurl's devices)
+- [ ] Tablet (the pen: KDE's page and knurl's pen layer one setting)
+- [ ] Keyboard (kxkbrc layouts, repeat; switchxkblayout the same)
+- [ ] Virtual Desktops (org_kde_plasma_virtual_desktop + D-Bus = loom's workspaces)
+- [ ] Window Behaviour, Window Rules (kwinrc, kwinrulesrc; org.kde.KWin window info)
+- [ ] Effects, Animations, KWin Scripts, Screen Edges (what loom has of them; the rest says so)
+- [ ] Window Decorations (KDecoration themes, the title bars), XWayland settings, Virtual Keyboard
 - [ ] plasma-window-management, org_kde_kwin_blur, server decoration (+ palette), appmenu
+- [ ] every one of the 68 pages opened on loom: works, or says plainly why not (a test that opens each)
 
 ## 4. Real hardware
 
