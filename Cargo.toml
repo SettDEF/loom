@@ -1,0 +1,10 @@
+[package]
+name = "zeal"
+version = "0.1.0"
+edition = "2024"
+description = "A Wayland compositor that speaks Hyprland's and KDE's protocols"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+smithay = { version = "0.7", default-features = false, features = ["wayland_frontend", "desktop", "renderer_pixman"] }
+png = "0.17"
