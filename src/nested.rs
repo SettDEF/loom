@@ -116,23 +116,27 @@ pub fn run(socket: Option<String>, run: Vec<String>) -> Result<(), Box<dyn std::
         WinitEvent::Redraw | WinitEvent::Focus(_) => state.dirty = true,
     })?;
 
-    // the frame: when something changed or an animation runs
+    // a frame when something changed or an animation runs (at most one per frame time); idle,
+    // loom sleeps: no ticking timer (battery)
     let out3 = output.clone();
-    event_loop.handle().insert_source(smithay::reexports::calloop::timer::Timer::from_duration(Duration::from_millis(8)), move |_, _, state: &mut Loom| {
-        if state.dirty || state.animating() {
+    let mut frame = move |state: &mut Loom| {
+        if state.frame_due() {
+            state.last_frame = std::time::Instant::now();
             state.dirty = false;
             let now = std::time::Instant::now();
             let mut nested = state.nested.take().expect("nested");
             let size = nested.backend.window_size();
-            let mut drawn = false;
+            let _ = size;
+            // only what changed goes to the screen (the damage), not the whole window
+            let mut changed: Option<Vec<smithay::utils::Rectangle<i32, smithay::utils::Physical>>> = None;
             if let Ok((renderer, mut fb)) = nested.backend.bind() {
                 let elements = crate::render::elements(state, renderer, &out3, now);
                 if let Ok(r) = damage.render_output(renderer, &mut fb, 0, &elements, [0.08, 0.08, 0.1, 1.0]) {
-                    drawn = r.damage.is_some();
+                    changed = r.damage.cloned();
                 }
             }
-            if drawn {
-                let _ = nested.backend.submit(Some(&[smithay::utils::Rectangle::from_size(size)]));
+            if let Some(d) = changed.filter(|d| !d.is_empty()) {
+                let _ = nested.backend.submit(Some(&d));
             }
             state.nested = Some(nested);
             let ms = state.now_ms();
@@ -145,9 +149,7 @@ pub fn run(socket: Option<String>, run: Vec<String>) -> Result<(), Box<dyn std::
             state.space.refresh();
             state.popups.cleanup();
         }
-        let _ = state.dh.flush_clients();
-        smithay::reexports::calloop::timer::TimeoutAction::ToDuration(Duration::from_millis(8))
-    })?;
+    };
 
     if !run.is_empty() {
         let mut cmd = Command::new(&run[0]);
@@ -160,7 +162,10 @@ pub fn run(socket: Option<String>, run: Vec<String>) -> Result<(), Box<dyn std::
         }
         cmd.spawn()?;
     }
-    event_loop.run(None, &mut state, |_| {})?;
+    event_loop.run(None, &mut state, |state| {
+        frame(state);
+        state.after_dispatch();
+    })?;
     Ok(())
 }
 

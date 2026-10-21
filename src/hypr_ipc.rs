@@ -41,14 +41,34 @@ pub fn start(handle: &LoopHandle<'static, Loom>) -> Result<HyprIpc, Box<dyn std:
     let events = UnixListener::bind(dir.join(".socket2.sock"))?;
     events.set_nonblocking(true)?;
     handle.insert_source(Generic::new(requests, Interest::READ, Mode::Level), |_, l, state: &mut Loom| {
-        while let Ok((mut s, _)) = l.accept() {
-            let _ = s.set_nonblocking(false);
-            let _ = s.set_read_timeout(Some(Duration::from_millis(200)));
-            let mut buf = vec![0u8; 8192];
-            let n = s.read(&mut buf).unwrap_or(0);
-            let req = String::from_utf8_lossy(&buf[..n]).to_string();
-            let reply = state.hypr_request(&req);
-            let _ = s.write_all(reply.as_bytes());
+        // each request read when it arrives (its own source): a slow client never stalls loom
+        while let Ok((s, _)) = l.accept() {
+            let _ = s.set_nonblocking(true);
+            let Some(h) = state.loop_handle.clone() else { continue };
+            let mut got: Vec<u8> = Vec::new();
+            let _ = h.insert_source(Generic::new(s, Interest::READ, Mode::Level), move |_, s, state: &mut Loom| {
+                // Safety: the stream is not dropped while the source lives
+                let s = unsafe { s.get_mut() };
+                let mut buf = [0u8; 4096];
+                loop {
+                    match s.read(&mut buf) {
+                        Ok(0) => break,
+                        Ok(n) => {
+                            got.extend_from_slice(&buf[..n]);
+                            if n < buf.len() {
+                                break;
+                            }
+                        }
+                        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => return Ok(PostAction::Continue),
+                        Err(_) => return Ok(PostAction::Remove),
+                    }
+                }
+                let reply = state.hypr_request(&String::from_utf8_lossy(&got));
+                let _ = s.set_nonblocking(false);
+                let _ = s.set_write_timeout(Some(Duration::from_millis(50)));
+                let _ = s.write_all(reply.as_bytes());
+                Ok(PostAction::Remove)
+            });
         }
         Ok(PostAction::Continue)
     })?;

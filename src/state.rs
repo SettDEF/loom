@@ -85,6 +85,9 @@ pub struct Loom {
     pub loop_handle: Option<smithay::reexports::calloop::LoopHandle<'static, Loom>>,
     /// the special workspace (Super+S) shown over the active one
     pub special_shown: bool,
+    /// frame pacing (event driven, no ticking timer): the last frame drawn, a wake-up for the next one armed
+    pub last_frame: Instant,
+    pub frame_wake_armed: bool,
     /// the Wayland socket programs connect to (WAYLAND_DISPLAY for what loom starts)
     pub socket_name: Option<String>,
     /// Xwayland's window manager once it runs, its display (DISPLAY=:N for what loom starts)
@@ -131,6 +134,8 @@ impl Loom {
             repeat_gen: 0,
             loop_handle: None,
             special_shown: false,
+            last_frame: Instant::now(),
+            frame_wake_armed: false,
             socket_name: None,
             xwm: None,
             x_display: None,
@@ -393,3 +398,36 @@ delegate_seat!(Loom);
 delegate_data_device!(Loom);
 delegate_output!(Loom);
 delegate_layer_shell!(Loom);
+
+/// The time between frames (60 Hz; the real screen's refresh with M4).
+pub const FRAME: std::time::Duration = std::time::Duration::from_micros(16_667);
+
+impl Loom {
+    /// Something to draw, and the last frame is a frame's time ago.
+    pub fn frame_due(&self) -> bool {
+        (self.dirty || self.animating()) && self.last_frame.elapsed() >= FRAME
+    }
+
+    /// The loop wakes in `d` (it sleeps otherwise until a client, input or a timer wakes it).
+    pub fn wake_in(&mut self, d: std::time::Duration) {
+        if let Some(h) = &self.loop_handle {
+            let _ = h.insert_source(smithay::reexports::calloop::timer::Timer::from_duration(d), |_, _, _| smithay::reexports::calloop::timer::TimeoutAction::Drop);
+        }
+    }
+
+    /// After each turn of the event loop: a frame waiting for its time gets one wake-up then
+    /// (never a ticking timer); what the clients were sent goes out.
+    pub fn after_dispatch(&mut self) {
+        if (self.dirty || self.animating()) && !self.frame_wake_armed {
+            let left = FRAME.saturating_sub(self.last_frame.elapsed());
+            self.frame_wake_armed = true;
+            if let Some(h) = &self.loop_handle {
+                let _ = h.insert_source(smithay::reexports::calloop::timer::Timer::from_duration(left), |_, _, s: &mut Loom| {
+                    s.frame_wake_armed = false;
+                    smithay::reexports::calloop::timer::TimeoutAction::Drop
+                });
+            }
+        }
+        let _ = self.dh.flush_clients();
+    }
+}

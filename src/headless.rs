@@ -88,11 +88,18 @@ pub fn run(opts: Options) -> Result<(), Box<dyn std::error::Error>> {
     let mut image = Image::new(FormatCode::A8R8G8B8, w as usize, h as usize, true).map_err(|_| "pixman image")?;
     let mut damage = OutputDamageTracker::from_output(&output);
 
-    // a frame every 16 ms: draw, then tell the windows they were shown
-    event_loop.handle().insert_source(Timer::from_duration(Duration::from_millis(16)), move |_, _, state: &mut Loom| {
-        // only when something changed or an animation runs: an idle desktop draws nothing
+    // a frame when something changed or an animation runs (at most one per 16 ms); an idle
+    // desktop draws nothing and loom sleeps: no timer ticks (battery)
+    if opts.snapshot.is_some() {
+        state.wake_in(opts.wait);
+    }
+    let mut frame = move |state: &mut Loom| {
         let snap_due = opts.snapshot.is_some() && state.start.elapsed() >= opts.wait;
-        if state.dirty || state.animating() || snap_due {
+        if !state.frame_due() && !snap_due {
+            return;
+        }
+        state.last_frame = std::time::Instant::now();
+        {
             state.dirty = false;
             let elements = crate::render::elements(state, &mut renderer, &output, std::time::Instant::now());
             if let Ok(mut fb) = renderer.bind(&mut image) {
@@ -123,8 +130,7 @@ pub fn run(opts: Options) -> Result<(), Box<dyn std::error::Error>> {
             }
             state.signal.stop();
         }
-        TimeoutAction::ToDuration(Duration::from_millis(16))
-    })?;
+    };
 
     // the script: one step every 25 ms once its time has come
     let mut script: std::collections::VecDeque<crate::input::Action> = opts.script.iter().cloned().collect();
@@ -151,7 +157,10 @@ pub fn run(opts: Options) -> Result<(), Box<dyn std::error::Error>> {
         cmd.spawn()?;
     }
 
-    event_loop.run(None, &mut state, |_| {})?;
+    event_loop.run(None, &mut state, |state| {
+        frame(state);
+        state.after_dispatch();
+    })?;
     Ok(())
 }
 
