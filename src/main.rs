@@ -6,6 +6,7 @@ mod anim;
 mod headless;
 mod hypr_ipc;
 mod hypr_proto;
+mod binds;
 mod focus;
 mod input;
 mod layouts;
@@ -19,7 +20,7 @@ use std::{path::PathBuf, time::Duration};
 
 fn main() {
     let mut args = std::env::args().skip(1);
-    let mut opts = headless::Options { size: (1280, 720), snapshot: None, wait: Duration::from_millis(2000), socket: None, run: Vec::new(), script: Vec::new(), script_at: Duration::from_millis(1200), record: None };
+    let mut opts = headless::Options { size: (1280, 720), snapshot: None, wait: Duration::from_millis(2000), socket: None, run: Vec::new(), script: Vec::new(), script_at: Duration::from_millis(1200), record: None, binds: None };
     let mut headless = false;
     let mut nested = false;
     while let Some(a) = args.next() {
@@ -35,6 +36,7 @@ fn main() {
             "--snapshot" => opts.snapshot = args.next().map(PathBuf::from),
             "--wait" => opts.wait = Duration::from_millis(args.next().and_then(|v| v.parse().ok()).unwrap_or(2000)),
             "--socket" => opts.socket = args.next(),
+            "--binds" => opts.binds = args.next().map(PathBuf::from),
             "--record" => {
                 opts.record = args.next().map(PathBuf::from);
                 if let Some(d) = &opts.record {

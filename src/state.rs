@@ -74,6 +74,11 @@ pub struct Loom {
     pub layouts: crate::layouts::Layouts,
     /// Hyprland's Wayland protocols' state (hypr_proto.rs)
     pub proto: crate::hypr_proto::HyprProto,
+    /// the user's Hyprland binds (binds.rs); the actions a key just matched
+    pub binds: crate::binds::Binds,
+    pub bind_actions: Vec<String>,
+    /// the fullscreen window, if one is
+    pub fullscreen: Option<Window>,
     /// the Wayland socket programs connect to (WAYLAND_DISPLAY for what loom starts)
     pub socket_name: Option<String>,
     /// Xwayland's window manager once it runs, its display (DISPLAY=:N for what loom starts)
@@ -113,6 +118,9 @@ impl Loom {
             hypr: None,
             layouts: crate::layouts::Layouts::load(),
             proto: Default::default(),
+            binds: Default::default(),
+            bind_actions: Vec::new(),
+            fullscreen: None,
             socket_name: None,
             xwm: None,
             x_display: None,

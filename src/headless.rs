@@ -37,6 +37,8 @@ pub struct Options {
     pub script_at: Duration,
     /// every frame drawn saved here as a PNG (animations as pictures; at most 400)
     pub record: Option<PathBuf>,
+    /// a Hyprland config whose binds to use (--binds; none by default headless: the user's binds talk to their running shell)
+    pub binds: Option<PathBuf>,
 }
 
 pub fn run(opts: Options) -> Result<(), Box<dyn std::error::Error>> {
@@ -51,6 +53,10 @@ pub fn run(opts: Options) -> Result<(), Box<dyn std::error::Error>> {
     };
     let socket_name = socket.socket_name().to_string_lossy().to_string();
     state.socket_name = Some(socket_name.clone());
+    if let Some(p) = &opts.binds {
+        state.binds = crate::binds::Binds::load(p);
+        eprintln!("loom: {} binds from {}", state.binds.binds.len(), p.display());
+    }
     state.hypr = Some(crate::hypr_ipc::start(&event_loop.handle())?);
     // X programs: Xwayland, started now (on demand later)
     match crate::xwayland::start(&event_loop.handle(), &mut state) {

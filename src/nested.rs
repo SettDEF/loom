@@ -13,7 +13,6 @@ use smithay::{
     },
     delegate_dmabuf,
     input::{
-        keyboard::FilterResult,
         pointer::{AxisFrame, ButtonEvent, MotionEvent},
     },
     output::{Mode, Output, PhysicalProperties, Scale, Subpixel},
@@ -81,6 +80,10 @@ pub fn run(socket: Option<String>, run: Vec<String>) -> Result<(), Box<dyn std::
     };
     let socket_name = socket.socket_name().to_string_lossy().to_string();
     state.socket_name = Some(socket_name.clone());
+    // the user's Hyprland binds (LOOM_HYPR_CONF, else ~/.config/hypr/hyprland.conf)
+    let conf = std::env::var("LOOM_HYPR_CONF").map(std::path::PathBuf::from).unwrap_or_else(|_| std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".config/hypr/hyprland.conf"));
+    state.binds = crate::binds::Binds::load(&conf);
+    eprintln!("loom: {} binds from {} ({} not handled yet: mouse)", state.binds.binds.len(), conf.display(), state.binds.skipped);
     state.hypr = Some(crate::hypr_ipc::start(&event_loop.handle())?);
     // X programs: Xwayland, started now (on demand later)
     match crate::xwayland::start(&event_loop.handle(), &mut state) {
@@ -166,8 +169,7 @@ impl Loom {
         let time = self.now_ms();
         match ev {
             InputEvent::Keyboard { event } => {
-                let kb = self.seat.get_keyboard().expect("keyboard");
-                kb.input::<(), _>(self, event.key_code(), event.state(), SERIAL_COUNTER.next_serial(), time, |_, _, _| FilterResult::Forward);
+                self.key_input(event.key_code(), event.state(), time);
             }
             InputEvent::PointerMotionAbsolute { event } => {
                 let Some(output) = self.output.clone() else { return };

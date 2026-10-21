@@ -5,7 +5,7 @@
 use smithay::{
     backend::input::{ButtonState, KeyState},
     input::{
-        keyboard::{FilterResult, Keycode},
+        keyboard::Keycode,
         pointer::{ButtonEvent, MotionEvent},
     },
     utils::{Point, SERIAL_COUNTER},
@@ -18,6 +18,8 @@ use crate::state::Loom;
 pub enum Action {
     /// an evdev key code, with Shift and Ctrl held around it
     Key { code: u32, shift: bool, ctrl: bool },
+    /// `<W-x>`: x with Super held (Super = 125)
+    Chord { held: u32, code: u32 },
     Click(f64, f64),
 }
 
@@ -53,12 +55,18 @@ pub fn parse_keys(s: &str) -> Vec<Action> {
         if c == '<' {
             if let Some(end) = rest.find('>') {
                 let name = &rest[1..end];
+                if let Some(k) = name.strip_prefix("W-").and_then(|n| if n.chars().count() == 1 { key_of(n.chars().next().unwrap_or(' ')).map(|x| x.0) } else { match n { "CR" | "Enter" => Some(28), "Space" => Some(57), "Esc" => Some(1), _ => None } }) {
+                    out.push(Action::Chord { held: 125, code: k });
+                    rest = &rest[end + 1..];
+                    continue;
+                }
                 let named = match name {
                     "CR" | "Enter" => Some((28, false, false)),
                     "Tab" => Some((15, false, false)),
                     "BS" => Some((14, false, false)),
                     "Esc" => Some((1, false, false)),
                     "Space" => Some((57, false, false)),
+                    "Super" | "W" => Some((125, false, false)),
                     n if n.starts_with("C-") && n.chars().count() == 3 => key_of(n.chars().nth(2).unwrap_or(' ')).map(|(k, s)| (k, s, true)),
                     _ => None,
                 };
@@ -83,10 +91,9 @@ impl Loom {
         let time = self.now_ms();
         match *a {
             Action::Key { code, shift, ctrl } => {
-                let kb = self.seat.get_keyboard().expect("keyboard");
                 let held: Vec<u32> = [(ctrl, 29u32), (shift, 42u32)].into_iter().filter(|h| h.0).map(|h| h.1).collect();
                 let press = |s: &mut Loom, k: u32, st: KeyState| {
-                    kb.input::<(), _>(s, Keycode::new(k + 8), st, SERIAL_COUNTER.next_serial(), time, |_, _, _| FilterResult::Forward);
+                    s.key_input(Keycode::new(k + 8), st, time);
                 };
                 for &h in &held {
                     press(self, h, KeyState::Pressed);
@@ -96,6 +103,12 @@ impl Loom {
                 for &h in held.iter().rev() {
                     press(self, h, KeyState::Released);
                 }
+            }
+            Action::Chord { held, code } => {
+                self.key_input(Keycode::new(held + 8), KeyState::Pressed, time);
+                self.key_input(Keycode::new(code + 8), KeyState::Pressed, time);
+                self.key_input(Keycode::new(code + 8), KeyState::Released, time);
+                self.key_input(Keycode::new(held + 8), KeyState::Released, time);
             }
             Action::Click(x, y) => {
                 let at: Point<f64, _> = (x, y).into();

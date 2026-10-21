@@ -42,6 +42,10 @@ Hyprland's internals on every release. loom is built for both from the start.
 
 ## Rules
 
+- **Performance first** (the user, 2026-10-21): the hot paths (every key, pointer motion, every
+  frame) do a lookup at most and allocate nothing in the common case; config is parsed once
+  into tables; anything new on a hot path is measured, not assumed.
+
 - Never replace the running session while testing: every milestone is tested **headless**
   (loom's own off-screen backend, a picture of what it shows) or nested, never on the TTY until
   the user starts it themselves.

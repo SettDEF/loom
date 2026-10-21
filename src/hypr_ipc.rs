@@ -97,12 +97,25 @@ impl Loom {
             "version" => Some(json!({ "branch": "loom", "commit": env!("CARGO_PKG_VERSION"), "version": "0.56.0", "dirty": false, "commit_message": "loom", "commit_date": "", "tag": "loom", "commits": "0", "buildAquamarine": "", "buildHyprlang": "", "buildHyprutils": "", "buildHyprcursor": "", "buildHyprgraphics": "", "flags": [] })),
             "status" => Some(json!({ "compositor": "loom", "version": env!("CARGO_PKG_VERSION") })),
             "globalshortcuts" => Some(Value::Array(self.proto.shortcuts.iter().map(|s| json!({ "name": format!("{}:{}", s.app_id, s.id), "description": s.description })).collect())),
-            "binds" | "instances" => Some(json!([])),
+            "binds" => Some(Value::Array(self.binds.list())),
+            "instances" => Some(json!([])),
+            "submap" => return if self.binds.submap == "global" { "default".into() } else { self.binds.submap.clone() },
             "getoption" => Some(json!({ "option": arg, "int": 0, "float": 0.0, "str": "", "set": false })),
             "cursorpos" => Some(json!({ "x": self.pointer_at.x as i32, "y": self.pointer_at.y as i32 })),
             "splash" => return "loom".into(),
             "dispatch" => return self.hypr_dispatch(arg),
-            "keyword" | "reload" | "setcursor" | "switchxkblayout" | "notify" | "dismissnotify" | "eval" => return "ok".into(),
+            "keyword" => {
+                // binds added or taken away at run time; other options accepted
+                let (k, v) = arg.split_once(' ').map(|(a, b)| (a.trim(), b.trim())).unwrap_or((arg, ""));
+                if k == "unbind" {
+                    self.binds.remove(v);
+                } else if let Some(flags) = k.strip_prefix("bind") {
+                    let sub = self.binds.submap.clone();
+                    self.binds.add(flags, v, &sub);
+                }
+                return "ok".into();
+            }
+            "reload" | "setcursor" | "switchxkblayout" | "notify" | "dismissnotify" | "eval" => return "ok".into(),
             _ => None,
         };
         match value {
@@ -184,6 +197,20 @@ impl Loom {
                     return format!("no global shortcut {a}");
                 }
             }
+            "submap" => {
+                let name = if a.is_empty() || a == "reset" { "global" } else { a };
+                self.binds.submap = name.to_string();
+                self.hypr_event(&format!("submap>>{}", if name == "global" { "" } else { name }));
+            }
+            "movefocus" => self.move_focus(a),
+            "cyclenext" => self.cycle_focus(!a.contains("prev")),
+            "bringactivetotop" | "alterzorder" => {
+                if let Some(w) = self.focused.clone() {
+                    self.space.raise_element(&w, true);
+                    self.dirty = true;
+                }
+            }
+            "fullscreen" | "fullscreenstate" => self.toggle_fullscreen(),
             "exit" => self.signal.stop(),
             _ => return format!("Invalid dispatcher {d}"),
         }
