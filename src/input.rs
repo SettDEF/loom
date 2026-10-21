@@ -101,9 +101,10 @@ impl Loom {
                 let at: Point<f64, _> = (x, y).into();
                 let under = self.space.element_under(at).map(|(w, loc)| (w.clone(), loc));
                 let pointer = self.seat.get_pointer().expect("pointer");
-                let focus = under.as_ref().and_then(|(w, loc)| {
-                    w.surface_under(at - loc.to_f64(), smithay::desktop::WindowSurfaceType::ALL).map(|(s, sloc)| (s, (sloc + *loc).to_f64()))
-                });
+                // layers too (the shell's bar, launcher), not only windows
+                let focus = self.surface_at(at);
+                self.pointer_at = at;
+                self.grab_press(at);
                 pointer.motion(self, focus, &MotionEvent { location: at, serial: SERIAL_COUNTER.next_serial(), time });
                 for st in [ButtonState::Pressed, ButtonState::Released] {
                     pointer.button(self, &ButtonEvent { button: 0x110, state: st, serial: SERIAL_COUNTER.next_serial(), time });

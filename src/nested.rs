@@ -174,6 +174,7 @@ impl Loom {
             InputEvent::PointerButton { event } => {
                 let pointer = self.seat.get_pointer().expect("pointer");
                 if event.state() == ButtonState::Pressed {
+                    self.grab_press(self.pointer_at);
                     // a press on a window: it comes up and has the keyboard
                     if let Some((w, _)) = self.space.element_under(self.pointer_at).map(|(w, l)| (w.clone(), l)) {
                         self.focus_window(&w);

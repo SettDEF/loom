@@ -161,6 +161,16 @@ impl Loom {
     pub fn title_of(&self, w: &Window) -> String {
         w.toplevel().and_then(|t| smithay::wayland::compositor::with_states(t.wl_surface(), |s| s.data_map.get::<smithay::wayland::shell::xdg::XdgToplevelSurfaceData>().and_then(|d| d.lock().ok()?.title.clone()))).unwrap_or_default()
     }
+    /// windowtitle(v2) for the shell; activewindow again when it is the focused one
+    pub fn title_changed_of(&mut self, w: &Window) {
+        let Some(addr) = self.managed_of(w).map(|m| m.addr) else { return };
+        let title = self.title_of(w);
+        self.hypr_event(&format!("windowtitle>>{addr:x}"));
+        self.hypr_event(&format!("windowtitlev2>>{addr:x},{title}"));
+        if self.focused.as_ref() == Some(w) {
+            self.hypr_event(&format!("activewindow>>{},{title}", self.class_of(w)));
+        }
+    }
     pub fn managed_of(&self, w: &Window) -> Option<&Managed> {
         self.managed.iter().find(|m| &m.window == w)
     }

@@ -29,7 +29,7 @@ where
             for layer in map.layers_on(*l).rev() {
                 let Some(geo) = map.layer_geometry(layer) else { continue };
                 let loc: Point<i32, Physical> = geo.loc.to_physical(1);
-                out.extend(AsRenderElements::<R>::render_elements::<WaylandSurfaceRenderElement<R>>(layer, renderer, loc, Scale::from(1.0), 1.0));
+                out.extend(AsRenderElements::<R>::render_elements::<WaylandSurfaceRenderElement<R>>(layer, renderer, loc, Scale::from(1.0), state.opacity_of(layer.wl_surface())));
             }
         }
     };
@@ -49,7 +49,7 @@ where
         let x = x + sw * (1.0 - scale) / 2.0 - geo.loc.x as f64 * scale;
         let y = y + sh * (1.0 - scale) / 2.0 - geo.loc.y as f64 * scale;
         let loc: Point<i32, Physical> = Point::from((x.round() as i32, y.round() as i32));
-        out.extend(AsRenderElements::<R>::render_elements::<WaylandSurfaceRenderElement<R>>(w, renderer, loc, Scale::from(scale), alpha as f32));
+        out.extend(AsRenderElements::<R>::render_elements::<WaylandSurfaceRenderElement<R>>(w, renderer, loc, Scale::from(scale), alpha as f32 * w.toplevel().map_or(1.0, |t| state.opacity_of(t.wl_surface()))));
     }
     layers(&mut out, renderer, &[Layer::Bottom, Layer::Background]);
     out

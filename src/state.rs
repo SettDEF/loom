@@ -73,6 +73,8 @@ pub struct Loom {
     pub hypr: Option<crate::hypr_ipc::HyprIpc>,
     /// each workspace's AwesomeWM layout (layouts.rs)
     pub layouts: crate::layouts::Layouts,
+    /// Hyprland's Wayland protocols' state (hypr_proto.rs)
+    pub proto: crate::hypr_proto::HyprProto,
     /// the Wayland socket programs connect to (WAYLAND_DISPLAY for what loom starts)
     pub socket_name: Option<String>,
 }
@@ -83,6 +85,7 @@ impl Loom {
         let mut seat = seat_state.new_wl_seat(&dh, "seat0");
         seat.add_keyboard(Default::default(), 600, 25).expect("keyboard");
         seat.add_pointer();
+        crate::hypr_proto::init(&dh);
         Loom {
             compositor_state: CompositorState::new::<Loom>(&dh),
             xdg_shell_state: XdgShellState::new::<Loom>(&dh),
@@ -106,6 +109,7 @@ impl Loom {
             focused: None,
             hypr: None,
             layouts: crate::layouts::Layouts::load(),
+            proto: Default::default(),
             socket_name: None,
             start: Instant::now(),
             signal,
@@ -242,6 +246,10 @@ impl CompositorHandler for Loom {
 impl XdgShellHandler for Loom {
     fn xdg_shell_state(&mut self) -> &mut XdgShellState {
         &mut self.xdg_shell_state
+    }
+    fn title_changed(&mut self, surface: ToplevelSurface) {
+        let Some(w) = self.managed.iter().find(|m| m.window.toplevel() == Some(&surface)).map(|m| m.window.clone()) else { return };
+        self.title_changed_of(&w);
     }
     fn new_toplevel(&mut self, surface: ToplevelSurface) {
         self.manage(Window::new_wayland_window(surface));

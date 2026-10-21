@@ -5,6 +5,7 @@
 mod anim;
 mod headless;
 mod hypr_ipc;
+mod hypr_proto;
 mod input;
 mod layouts;
 mod nested;

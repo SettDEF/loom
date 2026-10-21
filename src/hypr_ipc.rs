@@ -70,7 +70,8 @@ impl Loom {
     pub fn hypr_event(&mut self, line: &str) {
         let Some(h) = self.hypr.as_mut() else { return };
         let msg = format!("{line}\n");
-        h.listeners.retain_mut(|s| s.write_all(msg.as_bytes()).is_ok());
+        // a listener too slow to take it keeps its place (it misses this one); a gone one is dropped
+        h.listeners.retain_mut(|s| s.write_all(msg.as_bytes()).map_or_else(|e| e.kind() == std::io::ErrorKind::WouldBlock, |_| true));
     }
 
     /// One request, as hyprctl writes it: flags before a `/` (`j/monitors`), `[[BATCH]]a;b`.
@@ -91,11 +92,12 @@ impl Loom {
             "activeworkspace" => Some(self.hypr_workspace(self.active_ws)),
             "clients" => Some(Value::Array(self.managed.iter().map(|m| self.hypr_client(m)).collect())),
             "activewindow" => Some(self.focused.as_ref().and_then(|w| self.managed_of(w)).map(|m| self.hypr_client(m)).unwrap_or(json!({}))),
-            "layers" => Some(json!({})),
+            "layers" => Some(self.hypr_layers()),
             "devices" => Some(json!({ "mice": [], "keyboards": [{ "address": "0x0", "name": "loom-keyboard", "rules": "", "model": "", "layout": "us", "variant": "", "options": "", "active_keymap": "English (US)", "capsLock": false, "numLock": false, "main": true }], "tablets": [], "touch": [], "switches": [] })),
             "version" => Some(json!({ "branch": "loom", "commit": env!("CARGO_PKG_VERSION"), "version": "0.56.0", "dirty": false, "commit_message": "loom", "commit_date": "", "tag": "loom", "commits": "0", "buildAquamarine": "", "buildHyprlang": "", "buildHyprutils": "", "buildHyprcursor": "", "buildHyprgraphics": "", "flags": [] })),
             "status" => Some(json!({ "compositor": "loom", "version": env!("CARGO_PKG_VERSION") })),
-            "binds" | "globalshortcuts" | "instances" => Some(json!([])),
+            "globalshortcuts" => Some(Value::Array(self.proto.shortcuts.iter().map(|s| json!({ "name": format!("{}:{}", s.app_id, s.id), "description": s.description })).collect())),
+            "binds" | "instances" => Some(json!([])),
             "getoption" => Some(json!({ "option": arg, "int": 0, "float": 0.0, "str": "", "set": false })),
             "cursorpos" => Some(json!({ "x": self.pointer_at.x as i32, "y": self.pointer_at.y as i32 })),
             "splash" => return "loom".into(),
@@ -171,6 +173,11 @@ impl Loom {
                     Err(e) => return e,
                 }
             }
+            "global" => {
+                if !self.global_shortcut(a, true) {
+                    return format!("no global shortcut {a}");
+                }
+            }
             "exit" => self.signal.stop(),
             _ => return format!("Invalid dispatcher {d}"),
         }
@@ -209,6 +216,20 @@ impl Loom {
             "activelyTearing": false, "tearingBlockedBy": [], "directScanoutTo": "0", "directScanoutBlockedBy": [],
             "disabled": false, "currentFormat": "XRGB8888", "mirrorOf": "none", "availableModes": [format!("{w}x{h}@60.00Hz")],
         }])
+    }
+
+    /// Hyprland's form: by monitor, levels 0 (background) to 3 (overlay), each layer's box
+    fn hypr_layers(&self) -> Value {
+        use smithay::wayland::shell::wlr_layer::Layer as L;
+        let Some(o) = &self.output else { return json!({}) };
+        let map = smithay::desktop::layer_map_for_output(o);
+        let level = |l: L| -> Value {
+            Value::Array(map.layers_on(l).map(|s| {
+                let g = map.layer_geometry(s).unwrap_or_default();
+                json!({ "address": format!("0x{:x}", smithay::reexports::wayland_server::Resource::id(s.wl_surface()).protocol_id()), "x": g.loc.x, "y": g.loc.y, "w": g.size.w, "h": g.size.h, "namespace": s.namespace() })
+            }).collect())
+        };
+        json!({ o.name(): { "levels": { "0": level(L::Background), "1": level(L::Bottom), "2": level(L::Top), "3": level(L::Overlay) } } })
     }
 
     fn hypr_workspace(&self, id: i32) -> Value {
