@@ -25,7 +25,9 @@ The milestones of [PLAN.md](PLAN.md), each step a line; ticked when it works wit
 - [x] sendshortcut (vim mode: h → Left, tested), movewindow, togglespecialworkspace + special workspace, pin, resizeactive; repeating binds (binde, held keys repeat at 600 ms / 25 Hz)
 - [x] mouse binds: bindm Super+drag moves (a tiled window floats while moved, is tiled again in the slot it is dropped on), Super+right-drag resizes (a tiled one moves the layout's master share), mouse:N buttons, Super+scroll (300 ms apart, as Hyprland); one pointer path for nested and headless (--sdrag, --sscroll)
 - [x] Hyprland 0.56's Lua dispatch (`hl.dsp.focus({ workspace = 3 })` …, the 25 the shell sends) read and carried out; focuswindow by address:/class:/title:/pid:; movewindowpixel, movecursor, exec [workspace N silent]; focus moves on when a window leaves
-- [ ] xdg-decoration (server side), borders, gaps
+- [x] xdg-decoration + KDE server-decoration: programs draw no title bar or borders (as on Hyprland); zash's CPU-drawn frame (≈190 CPU buffers/s, the TTY slowness) gone
+- [ ] borders, gaps drawn by loom (milestone 6 looks)
+- [x] stats line (LOOM_STATS=1, always on a console): frames/s, render time, GPU vs CPU buffers and which program sends CPU ones
 - [ ] fractional scale, viewporter, cursor shape, primary selection, xdg-activation
 
 ## 2. Hyprland compatibility

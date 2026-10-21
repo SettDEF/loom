@@ -98,6 +98,9 @@ pub fn run(opts: Options) -> Result<(), Box<dyn std::error::Error>> {
     if opts.snapshot.is_some() {
         state.wake_in(opts.wait);
     }
+    if state.stats_on {
+        state.start_stats();
+    }
     let mut frame: Box<dyn FnMut(&mut Loom)> = if opts.gpu {
         // the GPU, surfaceless: programs may hand GPU buffers (linux-dmabuf), as on a real screen
         let r = crate::gpu::headless_renderer()?;
@@ -172,11 +175,16 @@ where
         state.last_frame = std::time::Instant::now();
         state.dirty = false;
         let mut r = renderer.borrow_mut();
+        let t0 = std::time::Instant::now();
         let elements = crate::render::elements(state, &mut *r, &output, std::time::Instant::now());
         let want_png = snap_due || (fo.record.is_some() && state.frames < 400);
         let mut pixels = None;
         if let Ok(mut fb) = r.bind(&mut target) {
             let _ = damage.render_output(&mut *r, &mut fb, 0, &elements, [0.08, 0.08, 0.1, 1.0]);
+            let us = t0.elapsed().as_micros() as u64;
+            state.stats.render_us += us;
+            state.stats.render_max_us = state.stats.render_max_us.max(us);
+            state.stats.frames += 1;
             if want_png {
                 pixels = read_rgba(&mut *r, &fb, fo.size);
             }

@@ -84,6 +84,9 @@ pub struct Loom {
     pub commit_count: std::collections::HashMap<u64, u64>,
     pub captured_at: std::collections::HashMap<(Option<smithay::reexports::wayland_server::backend::ClientId>, u64), u64>,
     /// linux-dmabuf when a GPU renderer is there; the headless GPU renderer (gpu.rs)
+    /// server-side decorations (decoration.rs): kept alive
+    pub _xdg_decoration_state: smithay::wayland::shell::xdg::decoration::XdgDecorationState,
+    pub kde_decoration_state: smithay::wayland::shell::kde::decoration::KdeDecorationState,
     pub dmabuf: Option<(smithay::wayland::dmabuf::DmabufState, smithay::wayland::dmabuf::DmabufGlobal)>,
     pub gpu: Option<crate::gpu::Shared>,
     /// the user's Hyprland binds (binds.rs); the actions a key just matched
@@ -105,6 +108,9 @@ pub struct Loom {
     pub tty: Option<crate::tty::Tty>,
     pub cursor_status: smithay::input::pointer::CursorImageStatus,
     pub frames_owed: bool,
+    /// per-second counts for the stats line (LOOM_STATS=1, always on a console)
+    pub stats_on: bool,
+    pub stats: Stats,
     /// frame pacing (event driven, no ticking timer): the last frame drawn, a wake-up for the next one armed
     pub last_frame: Instant,
     pub frame_wake_armed: bool,
@@ -125,6 +131,7 @@ impl Loom {
         seat.add_pointer();
         crate::hypr_proto::init(&dh);
         crate::foreign::init(&dh);
+        let (xdg_deco, kde_deco) = crate::decoration::init(&dh);
         crate::hypr_proto::init_mapping(&dh);
         crate::capture::init(&dh);
         crate::screencopy::init(&dh);
@@ -157,6 +164,8 @@ impl Loom {
             screen_captures: Vec::new(),
             commit_count: Default::default(),
             captured_at: Default::default(),
+            _xdg_decoration_state: xdg_deco,
+            kde_decoration_state: kde_deco,
             dmabuf: None,
             gpu: None,
             binds: Default::default(),
@@ -172,6 +181,8 @@ impl Loom {
             tty: None,
             cursor_status: smithay::input::pointer::CursorImageStatus::default_named(),
             frames_owed: false,
+            stats_on: std::env::var_os("LOOM_STATS").is_some(),
+            stats: Default::default(),
             last_frame: Instant::now(),
             frame_wake_armed: false,
             socket_name: None,
@@ -278,6 +289,25 @@ impl CompositorHandler for Loom {
         &client.get_data::<ClientState>().expect("client state").compositor_state
     }
     fn commit(&mut self, surface: &WlSurface) {
+        // what kind of buffer it brought (GPU or CPU memory): the stats line says how programs draw
+        if self.stats_on {
+            let kind = smithay::wayland::compositor::with_states(surface, |s| {
+                s.cached_state.get::<smithay::wayland::compositor::SurfaceAttributes>().current().buffer.as_ref().and_then(|b| match b {
+                    smithay::wayland::compositor::BufferAssignment::NewBuffer(buf) => smithay::backend::renderer::buffer_type(buf),
+                    _ => None,
+                })
+            });
+            match kind {
+                Some(smithay::backend::renderer::BufferType::Dma) => self.stats.dma += 1,
+                Some(smithay::backend::renderer::BufferType::Shm) => {
+                    self.stats.shm += 1;
+                    // who: the program, by its process name
+                    let who = smithay::reexports::wayland_server::Resource::client(surface).and_then(|c| c.get_credentials(&self.dh).ok()).map(|c| std::fs::read_to_string(format!("/proc/{}/comm", c.pid)).unwrap_or_default().trim().to_string()).unwrap_or_default();
+                    *self.stats.shm_by.entry(who).or_default() += 1;
+                }
+                _ => {}
+            }
+        }
         on_commit_buffer_handler::<Self>(surface);
         self.dirty = true;
         self.popups.commit(surface);
@@ -481,5 +511,36 @@ impl Loom {
             }
         }
         let _ = self.dh.flush_clients();
+    }
+}
+
+/// What a second held: frames shown, render time, buffers programs brought (GPU / CPU memory).
+#[derive(Default)]
+pub struct Stats {
+    pub frames: u32,
+    pub render_us: u64,
+    pub render_max_us: u64,
+    pub dma: u32,
+    pub shm: u32,
+    pub shm_by: std::collections::HashMap<String, u32>,
+}
+
+impl Loom {
+    /// Once a second while stats are on: one line to the log, the counts started again.
+    pub fn start_stats(&mut self) {
+        self.stats_on = true;
+        let Some(h) = self.loop_handle.clone() else { return };
+        let _ = h.insert_source(smithay::reexports::calloop::timer::Timer::from_duration(std::time::Duration::from_secs(1)), |_, _, s: &mut Loom| {
+            let st = std::mem::take(&mut s.stats);
+            // nothing happened: no line (an idle desktop stays quiet in the log too)
+            if st.frames + st.dma + st.shm > 0 {
+                let avg = if st.frames > 0 { st.render_us / st.frames as u64 } else { 0 };
+                let mut by: Vec<_> = st.shm_by.iter().collect();
+                by.sort_by_key(|(_, n)| std::cmp::Reverse(**n));
+                let by: Vec<String> = by.iter().take(3).map(|(w, n)| format!("{w} {n}")).collect();
+                eprintln!("loom: stats {} frames/s, render {:.2} ms avg {:.2} max, buffers {} gpu {} cpu{}", st.frames, avg as f64 / 1000.0, st.render_max_us as f64 / 1000.0, st.dma, st.shm, if by.is_empty() { String::new() } else { format!(" ({})", by.join(", ")) });
+            }
+            smithay::reexports::calloop::timer::TimeoutAction::ToDuration(std::time::Duration::from_secs(1))
+        });
     }
 }

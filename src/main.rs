@@ -9,6 +9,7 @@ mod hypr_lua;
 mod hypr_proto;
 mod binds;
 mod capture;
+mod decoration;
 mod focus;
 mod gpu;
 mod foreign;

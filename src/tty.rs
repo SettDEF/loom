@@ -288,6 +288,8 @@ pub fn run(opts: Options) -> Result<(), Box<dyn std::error::Error>> {
         state.spawn(&cmd);
     }
 
+    // the first tries: a stats line a second while anything happens (frames, render time, GPU vs CPU buffers)
+    state.start_stats();
     state.dirty = true;
     event_loop.run(None, &mut state, |state| {
         state.tty_frame(&renderer);
@@ -338,9 +340,18 @@ impl Loom {
         }
         elements.extend(crate::render::elements(self, &mut *r, &output, now).into_iter().map(TtyElement::Surface));
         let t = self.tty.as_mut().expect("tty");
-        match t.compositor.render_frame(&mut *r, &elements, [0.08, 0.08, 0.1, 1.0], FrameFlags::DEFAULT) {
+        let t0 = std::time::Instant::now();
+        let rendered = t.compositor.render_frame(&mut *r, &elements, [0.08, 0.08, 0.1, 1.0], FrameFlags::DEFAULT);
+        let us = t0.elapsed().as_micros() as u64;
+        self.stats.render_us += us;
+        self.stats.render_max_us = self.stats.render_max_us.max(us);
+        let t = self.tty.as_mut().expect("tty");
+        match rendered {
             Ok(res) if !res.is_empty => match t.compositor.queue_frame(()) {
-                Ok(()) => t.pending = true,
+                Ok(()) => {
+                    t.pending = true;
+                    self.stats.frames += 1;
+                }
                 Err(e) => eprintln!("loom: queue frame: {e:?}"),
             },
             // nothing changed on screen: the programs still get their frame, a refresh from now
