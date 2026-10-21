@@ -109,6 +109,8 @@ pub struct Loom {
     pub cursor_status: smithay::input::pointer::CursorImageStatus,
     pub frames_owed: bool,
     /// per-second counts for the stats line (LOOM_STATS=1, always on a console)
+    /// the settings (config.rs: Hyprland's, then init.lua)
+    pub look: crate::config::Look,
     pub stats_on: bool,
     pub stats: Stats,
     /// frame pacing (event driven, no ticking timer): the last frame drawn, a wake-up for the next one armed
@@ -181,6 +183,7 @@ impl Loom {
             tty: None,
             cursor_status: smithay::input::pointer::CursorImageStatus::default_named(),
             frames_owed: false,
+            look: crate::config::load().0,
             stats_on: std::env::var_os("LOOM_STATS").is_some(),
             stats: Default::default(),
             last_frame: Instant::now(),

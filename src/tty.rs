@@ -51,6 +51,7 @@ use crate::state::{client_data, Loom};
 smithay::backend::renderer::element::render_elements! {
     pub TtyElement<=GlesRenderer>;
     Surface=WaylandSurfaceRenderElement<GlesRenderer>,
+    Window=crate::render::GlesElement,
     Cursor=MemoryRenderBufferRenderElement<GlesRenderer>,
 }
 
@@ -134,6 +135,8 @@ pub fn run(opts: Options) -> Result<(), Box<dyn std::error::Error>> {
     let display: Display<Loom> = Display::new()?;
     let mut state = Loom::new(display.handle(), event_loop.get_signal());
     state.loop_handle = Some(event_loop.handle());
+    // init.lua applied when it changes
+    state.watch_config();
 
     // the session: the GPU and input devices, from logind (seatd)
     let (session, session_events) = LibSeatSession::new().map_err(|e| format!("no seat (run it from a TTY, logged in): {e:?}"))?;
@@ -338,7 +341,7 @@ impl Loom {
                 }
             }
         }
-        elements.extend(crate::render::elements(self, &mut *r, &output, now).into_iter().map(TtyElement::Surface));
+        elements.extend(crate::render::elements(self, &mut *r, &output, now).into_iter().map(TtyElement::Window));
         let t = self.tty.as_mut().expect("tty");
         let t0 = std::time::Instant::now();
         let rendered = t.compositor.render_frame(&mut *r, &elements, [0.08, 0.08, 0.1, 1.0], FrameFlags::DEFAULT);

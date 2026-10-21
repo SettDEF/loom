@@ -8,7 +8,7 @@ use smithay::{
         renderer::{
             damage::OutputDamageTracker,
             element::{surface::WaylandSurfaceRenderElement, AsRenderElements},
-            Bind, ExportMem, ImportAll, Offscreen, Renderer, Texture,
+            Bind, ExportMem, Offscreen, Texture,
         },
     },
     reexports::wayland_server::{backend::ClientId, protocol::wl_buffer::WlBuffer, Client, DataInit, Dispatch, DisplayHandle, Resource},
@@ -92,7 +92,7 @@ impl Dispatch<HyprlandToplevelExportFrameV1, u64> for Loom {
 /// client's shm buffer).
 pub fn run<R, T>(state: &mut Loom, renderer: &mut R)
 where
-    R: Renderer + ImportAll + Offscreen<T> + Bind<T> + ExportMem,
+    R: crate::render::LoomRenderer + Offscreen<T> + Bind<T> + ExportMem,
     R::TextureId: Texture + Clone + 'static,
     T: 'static,
 {

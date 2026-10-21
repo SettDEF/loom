@@ -8,7 +8,7 @@ use smithay::{
         renderer::{
             damage::OutputDamageTracker,
             element::utils::{Relocate, RelocateRenderElement},
-            Bind, ExportMem, ImportAll, Offscreen, Renderer, Texture,
+            Bind, ExportMem, Offscreen, Texture,
         },
     },
     reexports::{
@@ -86,7 +86,7 @@ impl Dispatch<ZwlrScreencopyFrameV1, Region> for Loom {
 /// The screen copies asked for, drawn now (the output's elements moved so the region is at 0,0).
 pub fn run<R, T>(state: &mut Loom, renderer: &mut R)
 where
-    R: Renderer + ImportAll + Offscreen<T> + Bind<T> + ExportMem,
+    R: crate::render::LoomRenderer + Offscreen<T> + Bind<T> + ExportMem,
     R::TextureId: Texture + Clone + 'static,
     T: 'static,
 {

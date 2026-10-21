@@ -57,6 +57,8 @@ pub fn run(socket: Option<String>, run: Vec<String>) -> Result<(), Box<dyn std::
     let socket_name = socket.socket_name().to_string_lossy().to_string();
     state.socket_name = Some(socket_name.clone());
     state.loop_handle = Some(event_loop.handle());
+    // init.lua applied when it changes
+    state.watch_config();
     // the user's Hyprland binds (LOOM_HYPR_CONF, else ~/.config/hypr/hyprland.conf)
     let conf = std::env::var("LOOM_HYPR_CONF").map(std::path::PathBuf::from).unwrap_or_else(|_| std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".config/hypr/hyprland.conf"));
     state.binds = crate::binds::Binds::load(&conf);

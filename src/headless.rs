@@ -9,7 +9,7 @@ use std::{cell::RefCell, rc::Rc};
 use smithay::{
     backend::{
         allocator::Fourcc,
-        renderer::{damage::OutputDamageTracker, gles::GlesTexture, pixman::PixmanRenderer, Bind, ExportMem, ImportAll, Offscreen, Renderer, Texture},
+        renderer::{damage::OutputDamageTracker, gles::GlesTexture, pixman::PixmanRenderer, Bind, ExportMem, Offscreen, Renderer, Texture},
     },
     output::{Mode, Output, PhysicalProperties, Scale, Subpixel},
     reexports::{
@@ -59,6 +59,8 @@ pub fn run(opts: Options) -> Result<(), Box<dyn std::error::Error>> {
     let socket_name = socket.socket_name().to_string_lossy().to_string();
     state.socket_name = Some(socket_name.clone());
     state.loop_handle = Some(event_loop.handle());
+    // init.lua applied when it changes
+    state.watch_config();
     if let Some(p) = &opts.binds {
         state.binds = crate::binds::Binds::load(p);
         eprintln!("loom: {} binds from {}", state.binds.binds.len(), p.display());
@@ -159,7 +161,7 @@ struct FrameOpts {
 /// The frame loop for a renderer `R` drawing into `target` (pixman image or GPU texture).
 fn frames<R, T>(renderer: Rc<RefCell<R>>, mut target: T, output: Output, mut damage: OutputDamageTracker, fo: FrameOpts) -> impl FnMut(&mut Loom)
 where
-    R: Renderer + ImportAll + Bind<T> + Offscreen<T> + ExportMem + 'static,
+    R: crate::render::LoomRenderer + Bind<T> + Offscreen<T> + ExportMem + 'static,
     R::TextureId: Texture + Clone + 'static,
     T: 'static,
 {
