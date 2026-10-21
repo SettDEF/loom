@@ -29,6 +29,7 @@ bwrap --ro-bind / / --dev /dev --proc /proc --tmpfs /tmp --dir /tmp/.X11-unix \
   --overlay-src "$HOME/.local/state" --tmp-overlay "$HOME/.local/state" \
   $NOKEYRING \
   --bind "$T/out" /tmp/out \
+  --ro-bind "$(dirname "$(readlink -f "$0")")/sandbox-bin" /tmp/sandbox-bin --setenv PATH "/tmp/sandbox-bin:$PATH" \
   --setenv XDG_RUNTIME_DIR /run/user/"$(id -u)" \
   --setenv DBUS_SYSTEM_BUS_ADDRESS unix:path=/nonexistent \
   --unsetenv DBUS_SESSION_BUS_ADDRESS --unsetenv WAYLAND_DISPLAY --unsetenv DISPLAY \

@@ -1,0 +1,5 @@
+#!/bin/sh
+# bluetoothctl in the loom sandbox: no system bus there, the real one aborts (a core dump each
+# time the shell polls); this one just says there is no controller
+echo "No default controller available"
+exit 1

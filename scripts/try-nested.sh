@@ -26,6 +26,7 @@ exec bwrap --ro-bind / / --dev-bind /dev /dev --proc /proc --tmpfs /tmp --dir /t
   --overlay-src "$HOME/.cache" --tmp-overlay "$HOME/.cache" \
   --overlay-src "$HOME/.local/state" --tmp-overlay "$HOME/.local/state" \
   $NOKEYRING \
+  --ro-bind "$(dirname "$(readlink -f "$0")")/sandbox-bin" /tmp/sandbox-bin --setenv PATH "/tmp/sandbox-bin:$PATH" \
   --setenv XDG_RUNTIME_DIR "$U" --setenv WAYLAND_DISPLAY wayland-host \
   --setenv DBUS_SYSTEM_BUS_ADDRESS unix:path=/nonexistent \
   --unsetenv DBUS_SESSION_BUS_ADDRESS --unsetenv DISPLAY \
