@@ -17,6 +17,7 @@ impl Bezier {
     /// Hyprland's default curve.
     pub const DEFAULT: Bezier = Bezier { x1: 0.05, y1: 0.9, x2: 0.1, y2: 1.05 };
     /// A gentle one for fades.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub const EASE_OUT: Bezier = Bezier { x1: 0.25, y1: 1.0, x2: 0.5, y2: 1.0 };
 
     fn coord(a: f64, b: f64, t: f64) -> f64 {
@@ -95,26 +96,54 @@ pub struct WindowAnim {
     pub scale: Anim,
     /// made, but nothing drawn yet: hidden, and the opening starts with its first frame
     pub waiting: bool,
+    /// how it glides to a new place (windowsMove)
+    pub move_dur: Duration,
+    /// its first picture was not yet at the size it was given: the opening waits for that one
+    pub deferred: bool,
 }
 
+/// How long an opening waits for a window to draw at the size it was given (a program that
+/// keeps its own size opens after it anyway).
+const SIZE_GRACE: Duration = Duration::from_millis(250);
+
 impl WindowAnim {
-    /// A new window: fades in and grows from 85 % at its place.
-    pub fn opening(x: f64, y: f64) -> WindowAnim {
-        let d = Duration::from_millis(280);
-        WindowAnim { x: Anim::still(x), y: Anim::still(y), alpha: Anim::new(0.0, 1.0, d, Bezier::EASE_OUT), scale: Anim::new(0.85, 1.0, d, Bezier::DEFAULT), waiting: true }
+    /// A new window, as the config's windowsIn and fadeIn say: grown from its popin size and faded
+    /// in at its place. `fade` false: shown as it is (KDE's effects animate it instead).
+    pub fn opening(fade: bool, x: f64, y: f64, cfg: &crate::layer_anim::Config) -> WindowAnim {
+        let (m, f) = (cfg.windows_in, cfg.win_fade_in);
+        let on = fade && cfg.enabled;
+        let from = match m.style {
+            Some(crate::layer_anim::Style::Popin(s)) => s,
+            _ => 0.85,
+        };
+        let alpha = if on && f.on { Anim::new(0.0, 1.0, f.dur, f.curve) } else { Anim::still(1.0) };
+        let scale = if on && m.on { Anim::new(from, 1.0, m.dur, m.curve) } else { Anim::still(1.0) };
+        let mv = cfg.windows_move;
+        let still = |v: f64| Anim { curve: mv.curve, ..Anim::still(v) };
+        WindowAnim { x: still(x), y: still(y), alpha, scale, waiting: true, move_dur: if cfg.enabled && mv.on { mv.dur } else { Duration::ZERO }, deferred: false }
     }
-    /// Its first frame came: the opening starts now.
-    pub fn shown(&mut self, now: Instant) {
+    /// A frame came: the opening starts with the first one at the size it was given (`fits`),
+    /// so it grows from its own middle, not from a first picture of another size; at the latest
+    /// SIZE_GRACE after its first frame. Until it starts it is drawn faded out.
+    pub fn shown(&mut self, now: Instant, fits: bool) {
+        let start = |a: &mut WindowAnim, at: Instant| {
+            a.alpha.start = at;
+            a.scale.start = at;
+        };
         if self.waiting {
             self.waiting = false;
-            self.alpha.start = now;
-            self.scale.start = now;
+            self.deferred = !fits;
+            start(self, if fits { now } else { now + SIZE_GRACE });
+        } else if self.deferred && fits {
+            self.deferred = false;
+            if self.alpha.start > now {
+                start(self, now);
+            }
         }
     }
     pub fn moving_to(&mut self, x: f64, y: f64, now: Instant) {
-        let d = Duration::from_millis(320);
-        self.x.retarget(x, d, now);
-        self.y.retarget(y, d, now);
+        self.x.retarget(x, self.move_dur, now);
+        self.y.retarget(y, self.move_dur, now);
     }
     /// Straight there, no glide (a window dragged by hand).
     pub fn jump_to(&mut self, x: f64, y: f64) {
@@ -139,6 +168,25 @@ mod tests {
         let linear = Bezier { x1: 1.0 / 3.0, y1: 1.0 / 3.0, x2: 2.0 / 3.0, y2: 2.0 / 3.0 };
         assert!((linear.at(0.5) - 0.5).abs() < 1e-3);
         assert!(Bezier::DEFAULT.at(0.3) > 0.9, "Hyprland's default is quick, then settles");
+    }
+
+    #[test]
+    fn an_opening_waits_for_the_size_it_was_given() {
+        let mut cfg = crate::layer_anim::Config::load();
+        cfg.enabled = true;
+        cfg.win_fade_in = crate::layer_anim::Motion { on: true, dur: Duration::from_millis(200), curve: Bezier::DEFAULT, style: None };
+        let t0 = Instant::now();
+        let mut a = WindowAnim::opening(true, 0.0, 0.0, &cfg);
+        // a first picture at another size: not started (faded out) until the right one comes
+        a.shown(t0, false);
+        assert!(a.alpha.value(t0 + Duration::from_millis(100)) < 1e-6, "still hidden");
+        a.shown(t0 + Duration::from_millis(40), true);
+        assert!(a.alpha.value(t0 + Duration::from_millis(41)) <= a.alpha.value(t0 + Duration::from_millis(120)));
+        assert!(!a.deferred && a.alpha.start <= t0 + Duration::from_millis(40), "starts with the right size");
+        // a program that never takes the size: opens after the grace anyway
+        let mut b = WindowAnim::opening(true, 0.0, 0.0, &cfg);
+        b.shown(t0, false);
+        assert_eq!(b.alpha.start, t0 + SIZE_GRACE);
     }
 
     #[test]

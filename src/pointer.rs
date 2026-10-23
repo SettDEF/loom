@@ -20,6 +20,9 @@ pub struct Drag {
     pub start: Rectangle<i32, Logical>,
     /// a tiled window floats while it is moved, and is tiled again where it is dropped
     pub was_tiled: bool,
+    /// the program asked for it (xdg_toplevel.move): its button release still goes to it, so it
+    /// knows the button is up again
+    pub from_client: bool,
 }
 
 /// Scroll binds fire at most this often (Hyprland's binds:scroll_event_delay).
@@ -32,7 +35,14 @@ impl Loom {
 
     /// The pointer to `at` (compositor space).
     pub fn pointer_move(&mut self, at: Point<f64, Logical>, time: u32) {
+        self.activity(false);
+        // the focus follows the pointer onto another screen
+        if let Some(o) = self.output_at(at).filter(|o| Some(o) != self.output.as_ref()) {
+            self.focus_output(&o);
+        }
         self.pointer_at = at;
+        // an X program dragging over Wayland windows (xdnd.rs)
+        self.xdnd_pointer(at);
         if self.drag.is_some() {
             self.drag_update(at);
             return;
@@ -40,22 +50,79 @@ impl Loom {
         self.decor_hover();
         let focus = self.surface_at(at);
         let pointer = self.seat.get_pointer().expect("pointer");
+        if let Some((s, _)) = &focus {
+            smithay::wayland::pointer_constraints::with_pointer_constraint(s, &pointer, |c| {
+                if let Some(c) = c.filter(|c| !c.is_active()) {
+                    c.activate();
+                }
+            });
+        }
+        let to = focus.as_ref().map(|(s, _)| s.clone());
+        self.gestures_leaving(to.as_ref(), time);
         pointer.motion(self, focus, &MotionEvent { location: at, serial: SERIAL_COUNTER.next_serial(), time });
+        pointer.frame(self);
+    }
+
+    /// What is under a still pointer changed (a window opened, closed or moved, the workspace
+    /// switched, a panel came or went): that surface is told the pointer is on it, as a motion
+    /// would, so its hover and the next click reach it. Nothing while a button holds a grab or a
+    /// window is dragged; nothing when the surface there is the same.
+    pub fn pointer_refresh(&mut self) {
+        let Some(pointer) = self.seat.get_pointer() else { return };
+        if self.drag.is_some() || pointer.is_grabbed() {
+            return;
+        }
+        let focus = self.surface_at(self.pointer_at);
+        if focus.as_ref().map(|(s, _)| s) == pointer.current_focus().as_ref() {
+            return;
+        }
+        let time = self.now_ms();
+        pointer.motion(self, focus, &MotionEvent { location: self.pointer_at, serial: SERIAL_COUNTER.next_serial(), time });
         pointer.frame(self);
     }
 
     /// A button (evdev code, 272 = left) pressed or let go.
     pub fn pointer_button(&mut self, button: u32, pressed: bool, time: u32) {
+        self.activity(false);
+        // let go: the X drag stand-in goes once the button is handled (an X click must not land on it)
+        if !pressed {
+            if let Some(h) = self.loop_handle.clone() {
+                h.insert_idle(|s| {
+                    let at = s.pointer_at;
+                    s.xdnd_pointer(at);
+                });
+            }
+        }
+        // the global shortcuts this button pressed are released with it (before the drag ends: that returns)
+        if !pressed {
+            self.release_globals(crate::hypr_proto::Held::Button(button));
+        }
         // a drag ends with its button
         if !pressed && self.drag.as_ref().is_some_and(|d| d.button == button) {
+            let from_client = self.drag.as_ref().is_some_and(|d| d.from_client);
             self.drag_end();
+            if !from_client {
+                return;
+            }
+            // the program asked for the move: it gets its release (and its implicit grab ends)
+            let pointer = self.seat.get_pointer().expect("pointer");
+            pointer.button(self, &ButtonEvent { button, state: ButtonState::Released, serial: SERIAL_COUNTER.next_serial(), time });
+            pointer.frame(self);
+            self.pointer_refresh();
             return;
         }
         if pressed {
+            // a press outside the open menus closes them
+            self.popup_grab_press(self.pointer_at);
             self.grab_press(self.pointer_at);
         }
         let mods = self.mods_mask();
-        let (acts, consume) = self.binds.mouse(Key::Mouse(button), mods, pressed);
+        let (acts, consume) = if self.locked() { (None, false) } else { self.binds.mouse(Key::Mouse(button), mods, pressed) };
+        if pressed {
+            if let Some(a) = &acts {
+                self.hold_globals(crate::hypr_proto::Held::Button(button), a);
+            }
+        }
         for a in acts.unwrap_or_default() {
             match a.strip_prefix("__drag ") {
                 Some(kind) => self.drag_start(kind.starts_with("resize"), button),
@@ -74,11 +141,10 @@ impl Loom {
         if self.decor_button(pressed, button, time) {
             return;
         }
-        // a press on a window: it comes up and has the keyboard
+        // a press: on a layer that takes the keyboard (the launcher's field), it gets it; on a
+        // window (with no layer over it there), it comes up and has the keyboard
         if pressed {
-            if let Some(w) = self.space.element_under(self.pointer_at).map(|(w, _)| w.clone()) {
-                self.focus_window(&w);
-            }
+            self.click_focus(self.pointer_at);
         }
         let state = if pressed { ButtonState::Pressed } else { ButtonState::Released };
         let pointer = self.seat.get_pointer().expect("pointer");
@@ -89,9 +155,10 @@ impl Loom {
     /// Scroll: `v` vertical, `h` horizontal (positive = down / right), with `v120` notches if the
     /// device has them. Scroll binds take it when one matches.
     pub fn pointer_scroll(&mut self, source: AxisSource, v: f64, h: f64, v120: Option<(f64, f64)>, time: u32) {
+        self.activity(false);
         let mods = self.mods_mask();
         let dir = if v < 0.0 { Some(0) } else if v > 0.0 { Some(1) } else if h < 0.0 { Some(2) } else if h > 0.0 { Some(3) } else { None };
-        if let Some(d) = dir {
+        if let (Some(d), false) = (dir, self.locked()) {
             let (acts, consume) = self.binds.mouse(Key::Scroll(d), mods, true);
             if let Some(acts) = acts {
                 if time.wrapping_sub(self.last_scroll_bind) >= SCROLL_DELAY_MS || self.last_scroll_bind == 0 {
@@ -106,6 +173,14 @@ impl Loom {
             }
         }
         let mut frame = AxisFrame::new(time).source(source);
+        // a touchpad's scroll ended (libinput gives a zero): the programs hear it stop, as Qt's
+        // kinetic lists need to end their scroll
+        if v == 0.0 && h == 0.0 && matches!(source, AxisSource::Finger | AxisSource::Continuous) {
+            let pointer = self.seat.get_pointer().expect("pointer");
+            pointer.axis(self, frame.stop(Axis::Vertical).stop(Axis::Horizontal));
+            pointer.frame(self);
+            return;
+        }
         for (axis, amount, notch) in [(Axis::Vertical, v, v120.map(|n| n.0)), (Axis::Horizontal, h, v120.map(|n| n.1))] {
             if amount != 0.0 {
                 frame = frame.value(axis, amount);
@@ -139,10 +214,10 @@ impl Loom {
             self.relayout();
             self.space.map_element(w.clone(), start.loc, true);
         }
-        self.drag = Some(Drag { resize, window: w, button, start_ptr: self.pointer_at, start, was_tiled });
+        self.drag = Some(Drag { resize, window: w, button, start_ptr: self.pointer_at, start, was_tiled, from_client: false });
     }
 
-    fn drag_update(&mut self, at: Point<f64, Logical>) {
+    pub fn drag_update(&mut self, at: Point<f64, Logical>) {
         let Some(d) = &self.drag else { return };
         let (dx, dy) = ((at.x - d.start_ptr.x) as i32, (at.y - d.start_ptr.y) as i32);
         let w = d.window.clone();
@@ -180,8 +255,19 @@ impl Loom {
         self.dirty = true;
     }
 
-    fn drag_end(&mut self) {
+    pub fn drag_end(&mut self) {
         let Some(d) = self.drag.take() else { return };
+        // dropped on the other screen: it joins the workspace shown there
+        if !d.resize {
+            let there = self.output_at(self.pointer_at).and_then(|o| self.shown_on.get(&o.name()).copied());
+            let here = self.managed_of(&d.window).map(|m| m.ws);
+            if let (Some(n), Some(h)) = (there, here) {
+                if n != h {
+                    self.move_window_to_workspace(&d.window, n);
+                    self.focus_window(&d.window);
+                }
+            }
+        }
         if d.was_tiled && !d.resize {
             // dropped: tiled again, in the place of the window it was dropped on
             let target = self.tile_slot_at(self.pointer_at, &d.window).filter(|w| w != &d.window);
@@ -216,6 +302,31 @@ impl Loom {
                 hits.first().map(|m| (*m).clone())
             }
             _ => None,
+        }
+    }
+}
+
+impl Loom {
+    /// A press (mouse or pen) at `at`: on a layer that takes the keyboard (the launcher's field), it
+    /// gets it; on a window (with no layer over it there), it comes up and has the keyboard.
+    pub fn click_focus(&mut self, at: Point<f64, Logical>) {
+        if self.locked() {
+            return;
+        }
+        let top = self.root_at(at);
+        let layer = top.as_ref().filter(|s| self.layer_output_of(s).is_some());
+        match layer {
+            Some(s) => {
+                if self.layer_keyboard(s) != smithay::wayland::shell::wlr_layer::KeyboardInteractivity::None {
+                    let s = s.clone();
+                    self.focus_layer(&s);
+                }
+            }
+            None => {
+                if let Some(w) = self.space.element_under(at).map(|(w, _)| w.clone()) {
+                    self.focus_window(&w);
+                }
+            }
         }
     }
 }

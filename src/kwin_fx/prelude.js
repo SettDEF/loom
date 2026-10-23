@@ -33,7 +33,7 @@ var QEasingCurve = {
 
 // any `…Changed` (or other) signal a script connects to exists on first use, as KWin has one per property
 function __signals(obj) {
-    return new Proxy(obj, { get: function (t, p) { if (!(p in t) && typeof p === "string" && /(Changed|Added|Removed|Closed|Activated|Started|Finished)$/.test(p)) t[p] = new Signal(); return t[p]; } });
+    return new Proxy(obj, { get: function (t, p) { if (!(p in t) && typeof p === "string" && /^window[A-Z]|(Changed?|Added|Removed|Closed|Activated|Started|Finished)$/.test(p)) t[p] = new Signal(); return t[p]; } });
 }
 
 var effects = {

@@ -24,15 +24,17 @@ pub struct Look {
     pub gaps_out: f32,
     /// whose window animations: "loom" (its own, Hyprland-like) or "kwin" (KDE's effects, kwin_fx)
     pub animations: String,
+    /// programs given loom's own X server (loom-x) instead of Xwayland, by name: loom.opt.own_x = { "xterm", "xeyes" }
+    pub own_x: Vec<String>,
 }
 
 impl Default for Look {
     fn default() -> Self {
-        Look { rounding: 0.0, rounding_power: 2.0, gaps_in: 5.0, gaps_out: 20.0, animations: "loom".into() }
+        Look { rounding: 0.0, rounding_power: 2.0, gaps_in: 5.0, gaps_out: 20.0, animations: "loom".into(), own_x: Vec::new() }
     }
 }
 
-fn home() -> PathBuf {
+pub fn home() -> PathBuf {
     PathBuf::from(std::env::var("HOME").unwrap_or_default())
 }
 
@@ -40,10 +42,10 @@ pub fn init_lua() -> PathBuf {
     std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from).unwrap_or_else(|| home().join(".config")).join("loom/init.lua")
 }
 
-/// Hyprland's config as `category:key = value` (nested `decoration { rounding = 18 }` blocks and
+/// Hyprland's config as ordered `(category:key, value)` lines (nested `decoration { rounding = 18 }` blocks and
 /// `decoration:rounding = 18` lines alike), following `source =`.
-pub fn hyprland_values(conf: &std::path::Path) -> HashMap<String, String> {
-    fn read(file: &std::path::Path, out: &mut HashMap<String, String>, depth: u32) {
+pub fn hyprland_lines(conf: &std::path::Path) -> Vec<(String, String)> {
+    fn read(file: &std::path::Path, out: &mut Vec<(String, String)>, depth: u32) {
         let Ok(text) = std::fs::read_to_string(file) else { return };
         let dir = file.parent().map(std::path::Path::to_path_buf).unwrap_or_default();
         let mut stack: Vec<String> = Vec::new();
@@ -69,12 +71,26 @@ pub fn hyprland_values(conf: &std::path::Path) -> HashMap<String, String> {
                 continue;
             }
             let key = if stack.is_empty() { k.to_string() } else { format!("{}:{k}", stack.join(":")) };
-            out.insert(key, v.to_string());
+            out.push((key, v.to_string()));
         }
     }
-    let mut out = HashMap::new();
+    let mut out = Vec::new();
     read(conf, &mut out, 0);
+    // Hyprland 0.56 reads hyprland.lua instead when there is one: its settings win
+    let lua = conf.with_file_name("hyprland.lua");
+    if lua.is_file() {
+        out.extend(crate::hypr_conf_lua::lines(&lua));
+    }
     out
+}
+
+/// Hyprland's config as `category:key = value`, the last one winning.
+pub fn hyprland_values(conf: &std::path::Path) -> HashMap<String, String> {
+    hyprland_lines(conf).into_iter().collect()
+}
+
+pub fn hyprland_conf() -> PathBuf {
+    home().join(".config/hypr/hyprland.conf")
 }
 
 /// The defaults: Hyprland's values where it sets them.
@@ -82,7 +98,20 @@ pub fn from_hyprland() -> Look {
     let v = hyprland_values(&home().join(".config/hypr/hyprland.conf"));
     let num = |k: &str, d: f32| v.get(k).and_then(|s| s.parse().ok()).unwrap_or(d);
     let d = Look::default();
-    Look { rounding: num("decoration:rounding", d.rounding), rounding_power: num("decoration:rounding_power", d.rounding_power), gaps_in: num("general:gaps_in", d.gaps_in), gaps_out: num("general:gaps_out", d.gaps_out), animations: d.animations }
+    Look { rounding: num("decoration:rounding", d.rounding), rounding_power: num("decoration:rounding_power", d.rounding_power), gaps_in: num("general:gaps_in", d.gaps_in), gaps_out: num("general:gaps_out", d.gaps_out), animations: d.animations, own_x: d.own_x }
+}
+
+/// Key repeat as Hyprland's input:repeat_delay (ms) and repeat_rate (keys a second) say.
+pub fn key_repeat() -> (i32, i32) {
+    let v = hyprland_values(&home().join(".config/hypr/hyprland.conf"));
+    let num = |k: &str, d: i32| v.get(k).and_then(|s| s.parse().ok()).unwrap_or(d);
+    (num("input:repeat_delay", 600), num("input:repeat_rate", 25).max(1))
+}
+
+/// The keyboard as Hyprland's input:kb_model, kb_layout, kb_variant and kb_options say.
+pub fn xkb_names() -> [String; 4] {
+    let v = hyprland_values(&home().join(".config/hypr/hyprland.conf"));
+    ["input:kb_model", "input:kb_layout", "input:kb_variant", "input:kb_options"].map(|k| v.get(k).map(|s| s.trim()).filter(|s| *s != "[[EMPTY]]").unwrap_or("").to_string())
 }
 
 /// Hyprland's defaults with init.lua run over them; the error, if the file has one.
@@ -106,6 +135,7 @@ fn run_lua(src: &str, base: &Look) -> Result<Look, String> {
     opt.set("gaps_in", base.gaps_in).map_err(e)?;
     opt.set("gaps_out", base.gaps_out).map_err(e)?;
     opt.set("animations", base.animations.as_str()).map_err(e)?;
+    opt.set("own_x", lua.create_sequence_from(base.own_x.iter().map(|s| s.as_str())).map_err(e)?).map_err(e)?;
     // what Hyprland's config says, to read (loom.hyprland.rounding)
     let hypr = lua.create_table().map_err(e)?;
     hypr.set("rounding", base.rounding).map_err(e)?;
@@ -146,6 +176,11 @@ fn run_lua(src: &str, base: &Look) -> Result<Look, String> {
             mlua::Value::Nil => base.animations.clone(),
             other => return Err(format!("loom.opt.animations must be \"loom\" or \"kwin\", not {}", other.type_name())),
         },
+        own_x: match opt.get::<mlua::Value>("own_x").map_err(e)? {
+            mlua::Value::Table(t) => t.sequence_values::<String>().collect::<Result<Vec<_>, _>>().map_err(|_| "loom.opt.own_x must be a list of program names".to_string())?,
+            mlua::Value::Nil => base.own_x.clone(),
+            other => return Err(format!("loom.opt.own_x must be a list of program names, not {}", other.type_name())),
+        },
     })
 }
 
@@ -165,6 +200,14 @@ impl crate::state::Loom {
         let hypr = home().join(".config/hypr");
         let _ = ino.watches().add(&hypr, mask);
         let _ = ino.watches().add(hypr.join("ii-decor.d"), mask);
+        // the rest of the Hyprland config: hyprland/, custom/, and lua/ with its folders (inotify is not recursive)
+        let _ = ino.watches().add(hypr.join("hyprland"), mask);
+        let _ = ino.watches().add(hypr.join("custom"), mask);
+        let mut dirs = vec![hypr.join("lua")];
+        while let Some(d) = dirs.pop() {
+            let _ = ino.watches().add(&d, mask);
+            dirs.extend(std::fs::read_dir(&d).into_iter().flatten().flatten().map(|e| e.path()).filter(|p| p.is_dir()));
+        }
         let Some(h) = self.loop_handle.clone() else { return };
         let src = smithay::reexports::calloop::generic::Generic::new(ino, smithay::reexports::calloop::Interest::READ, smithay::reexports::calloop::Mode::Level);
         let _ = h.insert_source(src, |_, ino, state: &mut crate::state::Loom| {
@@ -172,17 +215,73 @@ impl crate::state::Loom {
             // Safety: the inotify fd is not dropped while the source lives
             let ino = unsafe { ino.get_mut() };
             let names: Vec<String> = ino.read_events(&mut buf).map(|evs| evs.into_iter().filter_map(|e| e.name.map(|n| n.to_string_lossy().to_string())).collect()).unwrap_or_default();
-            if names.iter().any(|n| n == "init.lua") {
-                state.reload_config();
+            // a config file saved (not an editor's temp file or a backup). What the shell rewrites
+            // often is read on its own: ii-decor's json (the title bars) and its Glass Lua files
+            // (blur and rules); anything else is the whole config, read again once.
+            let config = |n: &&String| !n.starts_with('.') && !n.contains(".bak") && (n.ends_with(".conf") || n.ends_with(".lua") || n.ends_with(".json"));
+            let (mut decor, mut glass, mut all) = (false, false, false);
+            for n in names.iter().filter(config) {
+                match n.as_str() {
+                    n if n.ends_with(".json") => decor = true,
+                    n if n.starts_with("glass_") => glass = true,
+                    _ => all = true,
+                }
             }
-            // ii-decor.json, or a file in ii-decor.d: the bars read again and drawn anew
-            if names.iter().any(|n| n == "ii-decor.json" || (n.ends_with(".json") && n != "ii-decor.json" && !n.starts_with('.'))) {
-                state.decor.borrow_mut().reload();
-                state.relayout();
-                eprintln!("loom: ii-decor settings read again");
+            if all {
+                state.schedule_reload();
+            } else {
+                if glass {
+                    state.blur = crate::blur::Config::load();
+                    state.win_rules = crate::winrules::Rules::load();
+                    state.dirty = true;
+                }
+                if decor {
+                    state.decor.borrow_mut().reload();
+                    state.relayout();
+                }
             }
             Ok(smithay::reexports::calloop::PostAction::Continue)
         });
+    }
+
+    /// A reload soon: the saves of one moment (an editor, the shell writing several files) become one.
+    pub fn schedule_reload(&mut self) {
+        if std::mem::replace(&mut self.reload_pending, true) {
+            return;
+        }
+        let Some(h) = self.loop_handle.clone() else { return };
+        let t = smithay::reexports::calloop::timer::Timer::from_duration(std::time::Duration::from_millis(150));
+        let _ = h.insert_source(t, |_, _, state: &mut crate::state::Loom| {
+            state.reload_all();
+            smithay::reexports::calloop::timer::TimeoutAction::Drop
+        });
+    }
+
+    /// The whole config read again, as Hyprland's reload: binds, looks, rules, animations, the
+    /// title bars, input devices, the keyboard; values set by `keyword` stay. Tells the shell.
+    pub fn reload_all(&mut self) {
+        self.reload_pending = false;
+        crate::hypr_conf_lua::forget();
+        let submap = std::mem::take(&mut self.binds.submap);
+        self.binds = crate::binds::Binds::load(&hyprland_conf());
+        self.binds.submap = if submap.is_empty() { "global".into() } else { submap };
+        self.reload_config();
+        self.blur = crate::blur::Config::load();
+        self.layer_cfg = crate::layer_anim::Config::load();
+        self.gesture_cfg = crate::gestures::Config::load();
+        self.win_rules = crate::winrules::Rules::load();
+        self.frames_cfg = crate::frames::Config::load();
+        self.shader_conf = screen_shader_conf();
+        self.decor.borrow_mut().reload();
+        let lines = self.input_lines();
+        self.inputs.reapply(&lines);
+        self.apply_xkb();
+        let (delay, rate) = key_repeat();
+        self.seat.get_keyboard().expect("keyboard").change_repeat_info(rate, delay);
+        self.relayout();
+        self.dirty = true;
+        eprintln!("loom: config read again ({} binds)", self.binds.binds.len());
+        self.hypr_event("configreloaded>>");
     }
 
     pub fn reload_config(&mut self) {
@@ -195,6 +294,7 @@ impl crate::state::Loom {
                     let gaps = (look.gaps_in, look.gaps_out) != (self.look.gaps_in, self.look.gaps_out);
                     self.look = look;
                     self.dirty = true;
+                    self.apply_animations_setting();
                     if gaps {
                         self.relayout();
                     }
@@ -210,7 +310,7 @@ mod tests {
 
     #[test]
     fn lua_sets_options_both_ways() {
-        let base = Look { rounding: 18.0, rounding_power: 2.0, gaps_in: 4.0, gaps_out: 5.0, animations: "loom".into() };
+        let base = Look { rounding: 18.0, rounding_power: 2.0, gaps_in: 4.0, gaps_out: 5.0, animations: "loom".into(), own_x: Vec::new() };
         assert_eq!(run_lua("loom.opt.rounding = 12", &base).unwrap().rounding, 12.0);
         let l = run_lua("loom.setup { rounding = 6, rounding_power = 3 }", &base).unwrap();
         assert_eq!((l.rounding, l.rounding_power), (6.0, 3.0));
@@ -239,8 +339,20 @@ mod tests {
 mod anim_opt {
     #[test]
     fn animations_option() {
-        let base = super::Look { rounding: 0.0, rounding_power: 2.0, gaps_in: 4.0, gaps_out: 5.0, animations: "loom".into() };
+        let base = super::Look { rounding: 0.0, rounding_power: 2.0, gaps_in: 4.0, gaps_out: 5.0, animations: "loom".into(), own_x: Vec::new() };
         assert_eq!(super::run_lua("loom.opt.animations = 'kwin'", &base).unwrap().animations, "kwin");
         assert!(super::run_lua("loom.opt.animations = 'wobbly'", &base).is_err());
     }
+}
+
+/// Hyprland's xwayland:force_zero_scaling: X programs draw at the screen's own pixels (sharp; they
+/// size themselves, e.g. with Xft.dpi) instead of at 1 and scaled up by loom (blurry).
+pub fn xwayland_zero_scaling() -> bool {
+    let v = hyprland_values(&home().join(".config/hypr/hyprland.conf"));
+    v.get("xwayland:force_zero_scaling").is_some_and(|s| matches!(s.trim(), "true" | "1" | "yes" | "on"))
+}
+
+/// decoration:screen_shader as the config says ("" for none).
+pub fn screen_shader_conf() -> String {
+    hyprland_values(&hyprland_conf()).get("decoration:screen_shader").cloned().unwrap_or_default()
 }

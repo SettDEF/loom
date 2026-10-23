@@ -981,10 +981,16 @@ dependencies = [
  "rquickjs",
  "serde_json",
  "smithay",
+ "swash",
  "tiny-skia",
+ "wayland-client",
+ "wayland-protocols",
  "wayland-scanner",
  "wayland-server",
+ "x11rb",
+ "x11rb-protocol",
  "xcursor",
+ "xkbcommon",
 ]
 
 [[package]]

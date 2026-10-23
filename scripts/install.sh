@@ -1,0 +1,22 @@
+#!/bin/sh
+# install.sh: loom, loom-x and loom-session into ~/.local/bin (the session entry needs root: it prints the command).
+# Usage: scripts/install.sh   (LOOM_BIN = the release build; default: where cargo builds, $CARGO_TARGET_DIR/release)
+set -eu
+cd "$(dirname "$0")/.."
+T=${LOOM_BIN:-${CARGO_TARGET_DIR:-/mnt/storage/dev/cargo-target/loom}/release}
+# a build older than the source is not what was just built (a stale target folder): refused
+newest=$(find src Cargo.toml -newer "$T/loom" -type f 2>/dev/null | head -1)
+if [ -n "$newest" ]; then echo "$T/loom is older than $newest: build first (or LOOM_BIN=… for the right folder)" >&2; exit 1; fi
+B=$HOME/.local/bin
+mkdir -p "$B"
+for f in loom loom-x; do
+  [ -x "$T/$f" ] || { echo "no $T/$f: build it first (cargo build --release)" >&2; exit 1; }
+  # a new file, then renamed: a running loom keeps its old one
+  /usr/bin/cp -f "$T/$f" "$B/.$f.new" && /usr/bin/mv -f "$B/.$f.new" "$B/$f"
+done
+/usr/bin/cp -f scripts/loom-session "$B/loom-session" && chmod +x "$B/loom-session"
+echo "installed loom, loom-x, loom-session in $B"
+if ! cmp -s dist/loom.desktop /usr/share/wayland-sessions/loom.desktop; then
+  echo "for the login screen's session list (once, needs root):"
+  echo "  sudo install -m 644 $(pwd)/dist/loom.desktop /usr/share/wayland-sessions/loom.desktop"
+fi

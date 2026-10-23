@@ -85,6 +85,13 @@ impl TabletSeatHandle {
         inner.instances.push(seat.downgrade());
     }
 
+    /// Whether `client` bound this seat's tablet interface (it gets tablet events; one that did not
+    /// needs the pen as a pointer). Added for loom.
+    pub fn client_bound(&self, client: &wayland_server::backend::ClientId) -> bool {
+        use wayland_server::Resource;
+        self.inner.lock().unwrap().instances.iter().filter_map(|s| s.upgrade().ok()).any(|s| s.client().is_some_and(|c| &c.id() == client))
+    }
+
     /// Add a new tablet to a seat.
     ///
     /// You can either add tablet on [input::Event::DeviceAdded](crate::backend::input::InputEvent::DeviceAdded) event,

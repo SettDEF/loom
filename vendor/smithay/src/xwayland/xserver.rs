@@ -402,7 +402,7 @@ impl ClientData for XWaylandClientData {
             error!("Xwayland disconnected: {}", err);
         }
 
-        let mut child = self.child.lock().unwrap().take().unwrap();
+        let Some(mut child) = self.child.lock().unwrap().take() else { return };
         thread::spawn(move || {
             if let Ok(status) = child.wait() {
                 if !status.success() {
@@ -414,6 +414,11 @@ impl ClientData for XWaylandClientData {
 }
 
 impl XWaylandClientData {
+    /// loom: the Xwayland process (its socketpair's peer credentials are the compositor's own)
+    pub fn pid(&self) -> Option<u32> {
+        self.child.lock().unwrap().as_ref().map(|c| c.id())
+    }
+
     /// Access user_data map for a xwayland client
     pub fn user_data(&self) -> &UserDataMap {
         &self.data_map

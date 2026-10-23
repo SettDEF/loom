@@ -71,6 +71,11 @@ impl Dispatch<HyprlandToplevelExportManagerV1, ()> for Loom {
         };
         // shm ARGB8888 (0), packed rows
         f.buffer(smithay::reexports::wayland_server::protocol::wl_shm::Format::Argb8888, size.w as u32, size.h as u32, size.w as u32 * 4);
+        // a GPU buffer too, when the renderer can draw into one: the copy stays on the GPU (no
+        // read back and copy per frame while the overview shows it); the shell found none before
+        if state.copy_dmabuf.is_some() {
+            f.linux_dmabuf(Fourcc::Argb8888 as u32, size.w as u32, size.h as u32);
+        }
         if f.version() >= 2 {
             f.buffer_done();
         }
@@ -88,11 +93,11 @@ impl Dispatch<HyprlandToplevelExportFrameV1, u64> for Loom {
     }
 }
 
-/// The copies asked for, drawn now with `renderer` (offscreen, then read back into each
-/// client's shm buffer).
+/// The copies asked for, drawn now with `renderer`: straight into a client's GPU buffer, or
+/// offscreen and read back into its shm one.
 pub fn run<R, T>(state: &mut Loom, renderer: &mut R)
 where
-    R: crate::render::LoomRenderer + Offscreen<T> + Bind<T> + ExportMem,
+    R: crate::render::LoomRenderer + Offscreen<T> + Bind<T> + Bind<smithay::backend::allocator::dmabuf::Dmabuf> + ExportMem,
     R::TextureId: Texture + Clone + 'static,
     T: 'static,
 {
@@ -112,6 +117,18 @@ where
             let geo = w.geometry();
             let size = (geo.size.w, geo.size.h);
             let elements: Vec<WaylandSurfaceRenderElement<R>> = AsRenderElements::<R>::render_elements(&w, renderer, (-geo.loc.x, -geo.loc.y).into(), Scale::from(1.0), 1.0);
+            // the client's GPU buffer: drawn straight into it
+            if let Ok(d) = smithay::wayland::dmabuf::get_dmabuf(&c.buffer) {
+                if smithay::backend::allocator::Buffer::size(d) != smithay::utils::Size::from(size) {
+                    return None;
+                }
+                let mut d = d.clone();
+                let mut fb = renderer.bind(&mut d).ok()?;
+                let mut damage = OutputDamageTracker::new(size, 1.0, Transform::Normal);
+                let r = damage.render_output(renderer, &mut fb, 0, &elements, [0.0, 0.0, 0.0, 0.0]).ok()?;
+                let _ = r.sync.wait();
+                return Some(());
+            }
             let mut target = renderer.create_buffer(Fourcc::Argb8888, size.into()).ok()?;
             let mut fb = renderer.bind(&mut target).ok()?;
             let mut damage = OutputDamageTracker::new(size, 1.0, Transform::Normal);
@@ -152,6 +169,6 @@ impl Loom {
         self.commit_count.get(&c.addr).copied().unwrap_or(0) != self.captured_at.get(&key).copied().unwrap_or(u64::MAX)
     }
     pub fn captures_ready(&self) -> bool {
-        !self.screen_captures.is_empty() || self.captures.iter().any(|c| self.capture_ready(c))
+        self.screen_captures.iter().any(|c| c.ready(self.shown)) || self.captures.iter().any(|c| self.capture_ready(c))
     }
 }

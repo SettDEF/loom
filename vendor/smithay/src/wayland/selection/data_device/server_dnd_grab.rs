@@ -62,6 +62,22 @@ impl<D: SeatHandler + 'static> fmt::Debug for ServerDnDGrab<D> {
 }
 
 impl<D: SeatHandler> ServerDnDGrab<D> {
+    /// (loom) A drag loom carries for a source it speaks for (an X program's XDND drag): moved
+    /// by hand with `hover` and dropped with `finish`, never set as the pointer's grab (the X
+    /// program keeps the pointer till its button is let go).
+    pub fn detached(dh: &DisplayHandle, metadata: super::SourceMetadata, seat: Seat<D>) -> Self {
+        Self {
+            dh: dh.clone(),
+            pointer_start_data: None,
+            touch_start_data: None,
+            metadata,
+            current_focus: None,
+            pending_offers: Vec::with_capacity(1),
+            offer_data: None,
+            seat,
+        }
+    }
+
     pub(crate) fn new_pointer(
         dh: &DisplayHandle,
         start_data: PointerGrabStartData<D>,
@@ -195,6 +211,21 @@ where
                 }
             }
         }
+    }
+
+    /// (loom) The drag over `focus` (a surface and its place), at `location`; None: over nothing.
+    pub fn hover<F: WaylandFocus>(&mut self, focus: Option<(F, Point<f64, Logical>)>, location: Point<f64, Logical>, serial: Serial, time: u32) {
+        self.update_focus(focus, location, serial, time);
+    }
+
+    /// (loom) Dropped where it is: true when the program there took it (it asks for the data next).
+    pub fn finish(&mut self, data: &mut D) -> bool {
+        let taken = self.offer_data.as_ref().is_some_and(|d| {
+            let d = d.lock().unwrap();
+            d.accepted && !d.chosen_action.is_empty()
+        });
+        self.drop(data);
+        taken
     }
 
     fn drop(&mut self, data: &mut D) {

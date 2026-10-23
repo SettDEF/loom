@@ -121,8 +121,13 @@ impl P<'_> {
 
 /// `hl.dsp.window.move({ workspace = 3 })` → ("window.move", [Table{workspace: 3}]).
 pub fn parse(src: &str) -> Option<(String, Vec<Val>)> {
+    call(src, "hl.dsp.")
+}
+
+/// `PREFIXname(args)`, e.g. `hl.window_rule({ … })` with prefix `hl.`.
+pub fn call(src: &str, prefix: &str) -> Option<(String, Vec<Val>)> {
     let src = src.trim();
-    let rest = src.strip_prefix("hl.dsp.")?;
+    let rest = src.strip_prefix(prefix)?;
     let open = rest.find('(')?;
     let name = rest[..open].trim().to_string();
     let mut p = P { s: rest[open + 1..].as_bytes(), i: 0 };
@@ -161,8 +166,9 @@ pub fn translate(src: &str) -> Option<Vec<String>> {
                 vec![format!("movefocus {d}")]
             } else if f("window").is_some() {
                 vec![]
+            } else if let Some(m) = f("monitor") {
+                vec![format!("focusmonitor {m}")]
             } else {
-                // a monitor: loom has one so far
                 vec![]
             }
         }
@@ -178,8 +184,28 @@ pub fn translate(src: &str) -> Option<Vec<String>> {
                 vec![]
             }
         }
-        "window.close" => vec!["killactive".into()],
-        "window.float" => vec!["togglefloating".into()],
+        // a named window closed where it is (not focused first: that switched workspace)
+        "window.close" | "window.kill" => {
+            let verb = if name == "window.kill" { "killwindow" } else { "closewindow" };
+            match pre.pop() {
+                Some(focus) => vec![format!("{verb} {}", focus.trim_start_matches("focuswindow ").trim())],
+                None => vec![if name == "window.kill" { "killwindow activewindow".into() } else { "killactive".into() }],
+            }
+        }
+        // Hyprland 0.56: action toggle / enable (on) / disable (off)
+        "window.float" => vec![match f("action").as_deref() {
+            Some("enable" | "on") => "setfloating".into(),
+            Some("disable" | "off") => "settiled".into(),
+            _ => "togglefloating".into(),
+        }],
+        "window.resize" => match (f("x"), f("y")) {
+            (Some(x), Some(y)) => {
+                let rel = field(&args, "relative") == Some(&Val::Bool(true));
+                vec![if rel { format!("resizewindowpixel {x} {y}") } else { format!("resizewindowpixel exact {x} {y}") }]
+            }
+            // no size: the mouse resize (a `mouse = true` bind, as bindm resizewindow)
+            _ => vec!["resizewindow".into()],
+        },
         "window.pin" => vec!["pin".into()],
         "window.fullscreen" | "window.fullscreen_state" => vec!["fullscreen".into()],
         "window.cycle_next" => vec![if first(&args).is_some_and(|a| a.contains("prev")) { "cyclenext prev".into() } else { "cyclenext".into() }],
@@ -194,10 +220,20 @@ pub fn translate(src: &str) -> Option<Vec<String>> {
             }
         }
         "global" => vec![format!("global {}", first(&args)?)],
+        // the mouse move (a `mouse = true` bind, as bindm movewindow)
+        "window.drag" => vec!["movewindow".into()],
+        // a key sent to the window: send_shortcut({ mods = "CTRL", key = "Left" })
+        "send_shortcut" => vec![format!("sendshortcut {}, {}", f("mods").unwrap_or_default(), f("key")?)],
         "submap" => vec![format!("submap {}", first(&args).unwrap_or_else(|| "reset".into()))],
         "layout" => vec![format!("layoutmsg {}", first(&args)?)],
         // accepted, nothing to do yet (one monitor, no DPMS headless, events are the shell's own)
-        "workspace.rename" | "workspace.move" | "dpms" | "event" => vec![],
+        "dpms" => vec![format!("dpms {}", first(&args).or_else(|| field(&args, "action").map(Val::text)).unwrap_or_else(|| "toggle".into()))],
+        "workspace.move" => match (f("workspace"), f("monitor")) {
+            (Some(ws), Some(m)) => vec![format!("moveworkspacetomonitor {ws} {m}")],
+            (None, Some(m)) => vec![format!("movecurrentworkspacetomonitor {m}")],
+            _ => vec![],
+        },
+        "workspace.rename" | "event" => vec![],
         _ => return None,
     };
     pre.extend(main);
@@ -210,6 +246,14 @@ mod tests {
 
     #[test]
     fn reads_the_shells_calls() {
+        // a named window closed where it is, not focused first
+        assert_eq!(translate("hl.dsp.window.close({ window = \"address:0x5a\" })"), Some(vec!["closewindow address:0x5a".into()]));
+        assert_eq!(translate("hl.dsp.window.close()"), Some(vec!["killactive".into()]));
+        assert_eq!(translate("hl.dsp.window.float({ action = \"enable\" })"), Some(vec!["setfloating".into()]));
+        assert_eq!(translate("hl.dsp.window.float({ action = \"disable\" })"), Some(vec!["settiled".into()]));
+        assert_eq!(translate("hl.dsp.window.float({ action = \"toggle\" })"), Some(vec!["togglefloating".into()]));
+        assert_eq!(translate("hl.dsp.window.resize({ x = 800, y = 600, relative = false })"), Some(vec!["resizewindowpixel exact 800 600".into()]));
+        assert_eq!(translate("hl.dsp.window.resize({ x = 10, y = -5, relative = true })"), Some(vec!["resizewindowpixel 10 -5".into()]));
         assert_eq!(translate("hl.dsp.focus({ workspace = 3 })"), Some(vec!["workspace 3".into()]));
         assert_eq!(translate("hl.dsp.focus({ workspace = \"r+1\" })"), Some(vec!["workspace r+1".into()]));
         assert_eq!(translate("hl.dsp.window.move({ workspace = 4, follow = false, window = \"address:0x5a000100\" })"), Some(vec!["focuswindow address:0x5a000100".into(), "movetoworkspacesilent 4".into()]));
@@ -218,6 +262,9 @@ mod tests {
         assert_eq!(translate("hl.dsp.global(\"quickshell:overviewToggle\")"), Some(vec!["global quickshell:overviewToggle".into()]));
         assert_eq!(translate("hl.dsp.cursor.move({ x = 9999, y = -5 })"), Some(vec!["movecursor 9999 -5".into()]));
         assert_eq!(translate("hl.dsp.focus({ window = \"class:^(zash)$\" })"), Some(vec!["focuswindow class:^(zash)$".into()]));
+        assert_eq!(translate("hl.dsp.send_shortcut({ mods = \"CTRL\", key = \"Left\" })"), Some(vec!["sendshortcut CTRL, Left".into()]));
+        assert_eq!(translate("hl.dsp.window.drag()"), Some(vec!["movewindow".into()]));
+        assert_eq!(translate("hl.dsp.window.resize()"), Some(vec!["resizewindow".into()]));
         assert_eq!(translate("hl.dsp.nonsense()"), None);
     }
 }

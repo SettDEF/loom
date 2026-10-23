@@ -33,6 +33,9 @@ pub struct Flags {
     pub repeat: bool,
     pub non_consuming: bool,
     pub ignore_mods: bool,
+    /// `t`: a catchall that fires even when another bind takes the key (the shell's "Super was
+    /// used for something else" signal, so the launcher does not open on its release)
+    pub transparent: bool,
     #[allow(dead_code)] // binds that work on the lock screen (with ext-session-lock)
     pub locked: bool,
 }
@@ -66,6 +69,8 @@ pub struct Binds {
     pub last_repeat: bool,
     /// the config's `env = NAME,VALUE` lines, in order (set for what loom starts on a console)
     pub env: Vec<(String, String)>,
+    /// `exec-once` and `exec` lines, in order: started by `loom --tty --session`
+    pub exec_once: Vec<String>,
 }
 
 fn mods_of(s: &str) -> u8 {
@@ -153,6 +158,19 @@ impl Binds {
         let mut vars = HashMap::new();
         let mut submap = "global".to_string();
         b.read(conf, &mut vars, &mut submap, 0);
+        // a Lua config (hyprland.lua next to it) is what Hyprland 0.56 binds: its binds replace the
+        // conf's, which go stale once the Lua is edited (Super+Return differed, and would open two)
+        let lua = conf.with_file_name("hyprland.lua");
+        let lua_binds: Vec<(String, String)> = if lua.is_file() { crate::hypr_conf_lua::lines(&lua).into_iter().filter(|(k, _)| k.starts_with("bind") && k.contains('@')).collect() } else { Vec::new() };
+        if !lua_binds.is_empty() {
+            b.binds.clear();
+            b.tables.clear();
+            b.skipped = 0;
+            for (k, v) in lua_binds {
+                let (flags, submap) = k["bind".len()..].split_once('@').unwrap_or(("", "global"));
+                b.add(flags, &v, submap);
+            }
+        }
         b.submap = "global".into();
         b
     }
@@ -179,6 +197,8 @@ impl Binds {
                 if let Some((name, val)) = expand(v, vars).split_once(',') {
                     self.env.push((name.trim().to_string(), val.trim().to_string()));
                 }
+            } else if k == "exec-once" || k == "exec" {
+                self.exec_once.push(expand(v, vars));
             } else if k == "submap" {
                 *submap = v.to_string();
             } else if let Some(flags) = k.strip_prefix("bind") {
@@ -194,6 +214,7 @@ impl Binds {
             repeat: flags.contains('e'),
             non_consuming: flags.contains('n'),
             ignore_mods: flags.contains('i'),
+            transparent: flags.contains('t'),
             locked: flags.contains('l'),
         };
         let with_desc = flags.contains('d');
@@ -263,10 +284,14 @@ impl Binds {
             }
         }
         self.last_repeat = rep;
-        // a submap's catchall takes what nothing else did
-        if !matched && pressed {
+        // a submap's catchall takes what nothing else did; a transparent one any key but a modifier
+        let modifier = self_mod(sym) != 0 || self_mod_code(code) != 0;
+        if pressed && !modifier {
             for &i in &t.catchall {
                 let b = &self.binds[i];
+                if matched && !b.flags.transparent {
+                    continue;
+                }
                 if !b.flags.ignore_mods && b.mods != mods {
                     continue;
                 }
@@ -282,6 +307,13 @@ impl Binds {
         } else if self.taken.remove(&code) {
             consume = true;
         }
+        // a modifier (Shift, Ctrl, Alt, Super, AltGr) always reaches the program too, as in Hyprland:
+        // the launcher's Super-release bind took Super's release, and the window kept Super held, so
+        // its clicks came as Super+click (Zen's links did nothing) and keys as Super+key (Bitwig)
+        if (0xffe1..=0xffee).contains(&sym) || sym == 0xfe03 {
+            consume = false;
+            self.taken.remove(&code);
+        }
         (out, consume)
     }
 
@@ -296,13 +328,34 @@ mod tests {
     use super::*;
 
     fn conf(text: &str) -> Binds {
-        let dir = std::env::temp_dir().join(format!("loom-binds-{}", std::process::id()));
+        // one folder per call: the tests run at once
+        static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("loom-binds-{}-{n}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("sub.conf"), "bind = Super, Q, killactive,\n").unwrap();
         std::fs::write(dir.join("hyprland.conf"), text).unwrap();
         let b = Binds::load(&dir.join("hyprland.conf"));
         std::fs::remove_dir_all(&dir).ok();
         b
+    }
+
+    #[test]
+    #[test]
+    fn super_used_for_something_else_tells_the_shell() {
+        // the shell's own binds: Super alone opens the launcher on release, unless a key came between
+        let mut b = conf("bindrd = Super, code:133, Search, global, quickshell:searchReleaseTap\nbinditn = Super, catchall, global, quickshell:searchToggleReleaseInterrupt\nbind = Super, 1, workspace, 1\n");
+        let sup = xkb::keysym_from_name("Super_L", 0).raw();
+        let one = xkb::keysym_from_name("1", 0).raw();
+        let int = "global quickshell:searchToggleReleaseInterrupt".to_string();
+        assert!(!b.key(133, sup, SUPER, true, false).0.unwrap_or_default().contains(&int), "Super itself is no other key");
+        assert_eq!(b.key(10, one, SUPER, true, false).0, Some(vec!["workspace 1".into(), int.clone()]), "Super+1: the workspace and the interrupt");
+        assert_eq!(b.key(133, sup, 0, false, false).0, Some(vec!["global quickshell:searchReleaseTap".into()]));
+    }
+
+    fn reads_exec_once_in_order() {
+        let b = conf("$qs = ii\nexec-once = start-shell.sh $qs\n# exec-once = commented\nexec-once = hypridle # the idle daemon\nexec = true\n");
+        assert_eq!(b.exec_once, vec!["start-shell.sh ii", "hypridle", "true"]);
     }
 
     #[test]
@@ -331,7 +384,23 @@ impl crate::state::Loom {
     /// Every key goes through here: the binds first (one lookup), then the focused program.
     pub fn key_input(&mut self, code: smithay::input::keyboard::Keycode, st: smithay::backend::input::KeyState, time: u32) {
         let pressed = st == smithay::backend::input::KeyState::Pressed;
+        self.activity(pressed);
         let kb = self.seat.get_keyboard().expect("keyboard");
+        // the keyboard stuck on a panel that no longer wants it (or is gone): back to the window
+        // first, so the key reaches it (the browser got no keys while the desktop layer kept it)
+        if pressed && !self.locked() {
+            if let Some(f) = kb.current_focus().and_then(|f| f.surface()) {
+                let layer = self.layer_output_of(&f).is_some();
+                let stale = !smithay::reexports::wayland_server::Resource::is_alive(&f) || (layer && self.layer_keyboard(&f) == smithay::wayland::shell::wlr_layer::KeyboardInteractivity::None);
+                if stale {
+                    eprintln!("loom: the keyboard was left on {}; back to the window", if layer { self.layer_ns(&f) } else { "a gone surface".into() });
+                    match self.focused.clone() {
+                        Some(w) => self.focus_window(&w),
+                        None => kb.set_focus(self, None, smithay::utils::SERIAL_COUNTER.next_serial()),
+                    }
+                }
+            }
+        }
         kb.input::<(), _>(self, code, st, smithay::utils::SERIAL_COUNTER.next_serial(), time, |data, mods, h| {
             let sym = h.raw_latin_sym_or_raw_current_sym().map_or(0, |s| s.raw());
             // on the real screen, before any bind: Ctrl+Alt+F<n> switches the console, Ctrl+Alt+Backspace quits
@@ -343,11 +412,20 @@ impl crate::state::Loom {
                     }
                     return smithay::input::keyboard::FilterResult::Intercept(());
                 }
-                if mods.ctrl && mods.alt && sym == keysyms::KEY_BackSpace {
+                // not while locked: quitting would leave the session open
+                if mods.ctrl && mods.alt && sym == keysyms::KEY_BackSpace && !data.locked() {
                     eprintln!("loom: Ctrl+Alt+Backspace, quitting");
                     data.signal.stop();
                     return smithay::input::keyboard::FilterResult::Intercept(());
                 }
+            }
+            // a VM or remote desktop holding a shortcuts inhibitor: its keys too
+            if smithay::wayland::keyboard_shortcuts_inhibit::KeyboardShortcutsInhibitorSeat::keyboard_shortcuts_inhibited(&data.seat) {
+                return smithay::input::keyboard::FilterResult::Forward;
+            }
+            // locked: every key to the lock screen, no bind
+            if data.locked() {
+                return smithay::input::keyboard::FilterResult::Forward;
             }
             let (acts, consume) = data.binds.key(h.raw_code().raw(), sym, mask(mods), pressed, false);
             if let Some(a) = acts {
@@ -365,13 +443,21 @@ impl crate::state::Loom {
                 smithay::input::keyboard::FilterResult::Forward
             }
         });
+        let held = crate::hypr_proto::Held::Key(code.raw());
         if !self.bind_actions.is_empty() {
-            for a in std::mem::take(&mut self.bind_actions) {
+            let acts = std::mem::take(&mut self.bind_actions);
+            if pressed {
+                self.hold_globals(held, &acts);
+            }
+            for a in acts {
                 let r = self.hypr_dispatch(&a);
                 if r != "ok" {
                     eprintln!("loom: bind `{a}`: {r}");
                 }
             }
+        }
+        if !pressed {
+            self.release_globals(held);
         }
     }
 }
@@ -385,7 +471,9 @@ impl crate::state::Loom {
         self.repeat = Some((code, actions));
         let Some(h) = self.loop_handle.clone() else { return };
         use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
-        let _ = h.insert_source(Timer::from_duration(std::time::Duration::from_millis(600)), move |_, _, s: &mut crate::state::Loom| {
+        let (delay, rate) = crate::config::key_repeat();
+        let every = std::time::Duration::from_millis(1000 / rate as u64);
+        let _ = h.insert_source(Timer::from_duration(std::time::Duration::from_millis(delay as u64)), move |_, _, s: &mut crate::state::Loom| {
             if s.repeat_gen != this {
                 return TimeoutAction::Drop;
             }
@@ -393,7 +481,7 @@ impl crate::state::Loom {
             for a in &acts {
                 s.hypr_dispatch(a);
             }
-            TimeoutAction::ToDuration(std::time::Duration::from_millis(40))
+            TimeoutAction::ToDuration(every)
         });
     }
 }

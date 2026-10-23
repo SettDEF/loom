@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 description = "A Wayland compositor that speaks Hyprland's and KDE's protocols"
 license = "MIT OR Apache-2.0"
+default-run = "loom"
 
 [dependencies]
 smithay = { version = "0.7", default-features = false, features = ["wayland_frontend", "desktop", "renderer_pixman", "renderer_gl", "backend_winit", "backend_egl", "xwayland", "backend_drm", "backend_gbm", "backend_libinput", "backend_session_libseat", "backend_udev"] }
@@ -20,6 +21,13 @@ inotify = "0.11"
 cosmic-text = "0.14"
 tiny-skia = "0.11"
 rquickjs = { version = "0.9", features = ["classes", "properties"] }
+x11rb = { version = "0.13", features = ["res", "render", "glx"] }
+# loom-x (src/bin/loom-x): the own X server, a Wayland client of loom
+x11rb-protocol = { version = "0.13", features = ["request-parsing", "shape", "randr", "xfixes", "shm", "render", "xinput", "dri3", "present", "sync", "glx", "xkb"] }
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client", "staging"] }
+xkbcommon = "0.8"
+swash = "0.2"
 
 # smithay with a fix: a destroyed layer surface's next commit no longer kills the client
 [patch.crates-io]

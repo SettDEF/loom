@@ -1,0 +1,7 @@
+[Desktop Entry]
+Name=loom
+Comment=loom, the Wayland compositor (Hyprland and KDE compatible)
+Exec=/home/caesar/.local/bin/loom-session
+Type=Application
+DesktopNames=Hyprland
+Keywords=wayland;compositor;

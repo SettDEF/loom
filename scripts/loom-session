@@ -1,0 +1,8 @@
+#!/bin/sh
+# loom-session: what the login screen (GDM) runs for the loom session: loom on the screen, the Hyprland config's exec-once programs started.
+# Everything it says goes to ~/.local/state/loom/session-<time>.log. Installed by scripts/install.sh.
+LOG_DIR=${XDG_STATE_HOME:-$HOME/.local/state}/loom
+mkdir -p "$LOG_DIR"
+# the portals and the shell treat it as Hyprland (loom speaks Hyprland's IPC)
+export XDG_CURRENT_DESKTOP=Hyprland XDG_SESSION_DESKTOP=loom XDG_SESSION_TYPE=wayland
+exec "$HOME/.local/bin/loom" --tty --session > "$LOG_DIR/session-$(date +%Y%m%d-%H%M%S).log" 2>&1

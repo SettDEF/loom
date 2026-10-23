@@ -45,6 +45,9 @@ void main() {
 #endif
     // this pixel in the window's geometry; past a corner's centre: how far out of its curve
     vec2 p = elem_off + v_coords * elem_size;
+    // outside the box (a client's own shadow margin): not drawn
+    if (p.x < 0.0 || p.y < 0.0 || p.x > geo_size.x || p.y > geo_size.y)
+        color = vec4(0.0);
     vec2 q = abs(p - geo_size * 0.5) - (geo_size * 0.5 - vec2(radius));
     if (q.x > 0.0 && q.y > 0.0) {
         float d = pow(pow(q.x, power) + pow(q.y, power), 1.0 / power);

@@ -40,6 +40,8 @@ pub struct DnDGrab<D: SeatHandler> {
     touch_start_data: Option<TouchGrabStartData<D>>,
     data_source: Option<wl_data_source::WlDataSource>,
     current_focus: Option<WlSurface>,
+    /// (loom) current_focus is a foreign target (the compositor does the drag there)
+    foreign: bool,
     pending_offers: Vec<wl_data_offer::WlDataOffer>,
     offer_data: Option<Arc<Mutex<OfferData>>>,
     icon: Option<WlSurface>,
@@ -55,6 +57,7 @@ impl<D: SeatHandler + 'static> fmt::Debug for DnDGrab<D> {
             .field("touch_start_data", &self.touch_start_data)
             .field("data_source", &self.data_source)
             .field("current_focus", &self.current_focus)
+            .field("foreign", &self.foreign)
             .field("pending_offers", &self.pending_offers)
             .field("offer_data", &self.offer_data)
             .field("icon", &self.icon)
@@ -79,6 +82,7 @@ impl<D: SeatHandler> DnDGrab<D> {
             touch_start_data: None,
             data_source: source,
             current_focus: None,
+            foreign: false,
             pending_offers: Vec::with_capacity(1),
             offer_data: None,
             origin,
@@ -101,6 +105,7 @@ impl<D: SeatHandler> DnDGrab<D> {
             touch_start_data: Some(start_data),
             data_source: source,
             current_focus: None,
+            foreign: false,
             pending_offers: Vec::with_capacity(1),
             offer_data: None,
             origin,
@@ -118,11 +123,36 @@ where
 {
     fn update_focus<F: WaylandFocus>(
         &mut self,
+        data: &mut D,
         focus: Option<(F, Point<f64, Logical>)>,
         location: Point<f64, Logical>,
         serial: Serial,
         time: u32,
     ) {
+        // (loom) a surface the compositor takes the drag over itself (an X window: XDND)
+        let surface = focus.as_ref().and_then(|(s, _)| s.wl_surface().map(|w| w.into_owned()));
+        let origin = focus.as_ref().map(|(_, loc)| *loc);
+        if self.foreign {
+            if surface.is_some() && surface == self.current_focus {
+                if let (Some(s), Some(loc), Some(src)) = (surface.as_ref(), origin, self.data_source.clone()) {
+                    data.dnd_foreign_motion(s, location - loc, &src, time);
+                }
+                return;
+            }
+            data.dnd_foreign_leave();
+            self.foreign = false;
+            self.current_focus = None;
+        }
+        if let (Some(s), Some(loc), Some(src)) = (surface.as_ref(), origin, self.data_source.clone()) {
+            if surface != self.current_focus && data.dnd_foreign_target(s) {
+                // out of the Wayland surface it was over, as any focus change
+                self.update_focus::<F>(data, None, location, serial, time);
+                self.foreign = true;
+                self.current_focus = Some(s.clone());
+                data.dnd_foreign_motion(s, location - loc, &src, time);
+                return;
+            }
+        }
         let seat_data = self
             .seat
             .user_data()
@@ -225,6 +255,20 @@ where
     }
 
     fn drop(&mut self, data: &mut D) {
+        // (loom) dropped on a foreign target: the compositor hands it over
+        if self.foreign {
+            let validated = self.data_source.clone().is_some_and(|s| data.dnd_foreign_drop(&s));
+            if let Some(ref source) = self.data_source {
+                if !validated {
+                    source.cancelled();
+                } else if source.version() >= wl_data_source::EVT_DND_DROP_PERFORMED_SINCE {
+                    source.dnd_drop_performed();
+                }
+            }
+            ClientDndGrabHandler::dropped(data, self.current_focus.clone(), validated, self.seat.clone());
+            self.icon = None;
+            return;
+        }
         // the user dropped, proceed to the drop
         let seat_data = self
             .seat
@@ -294,7 +338,7 @@ where
         // While the grab is active, no client has pointer focus
         handle.motion(data, None, event);
 
-        self.update_focus(focus, event.location, event.serial, event.time);
+        self.update_focus(data, focus, event.location, event.serial, event.time);
     }
 
     fn relative_motion(
@@ -438,7 +482,7 @@ where
 
     fn motion(
         &mut self,
-        _data: &mut D,
+        data: &mut D,
         _handle: &mut crate::input::touch::TouchInnerHandle<'_, D>,
         focus: Option<(<D as SeatHandler>::TouchFocus, Point<f64, Logical>)>,
         event: &crate::input::touch::MotionEvent,
@@ -448,7 +492,7 @@ where
             return;
         }
 
-        self.update_focus(focus, event.location, SERIAL_COUNTER.next_serial(), event.time);
+        self.update_focus(data, focus, event.location, SERIAL_COUNTER.next_serial(), event.time);
     }
 
     fn frame(

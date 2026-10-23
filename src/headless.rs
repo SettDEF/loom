@@ -42,6 +42,8 @@ pub struct Options {
     pub binds: Option<PathBuf>,
     /// draw on the GPU (surfaceless) and offer linux-dmabuf, as on a real screen (--gpu)
     pub gpu: bool,
+    /// more screens, right of the first (scale 1): only the first is drawn and shot; the others show through grim -o
+    pub more: Vec<(i32, i32)>,
     /// the output's scale (--scale 1.6)
     pub scale: f64,
 }
@@ -59,6 +61,7 @@ pub fn run(opts: Options) -> Result<(), Box<dyn std::error::Error>> {
     let socket_name = socket.socket_name().to_string_lossy().to_string();
     state.socket_name = Some(socket_name.clone());
     state.loop_handle = Some(event_loop.handle());
+    state.init_idle();
     // init.lua applied when it changes
     state.watch_config();
     if let Some(p) = &opts.binds {
@@ -66,6 +69,7 @@ pub fn run(opts: Options) -> Result<(), Box<dyn std::error::Error>> {
         eprintln!("loom: {} binds from {}", state.binds.binds.len(), p.display());
     }
     state.hypr = Some(crate::hypr_ipc::start(&event_loop.handle())?);
+    state.headless = true;
     // X programs: the display reserved now, Xwayland started by the first X program
     match crate::xwayland::start(&event_loop.handle(), &mut state) {
         Ok(n) => state.x_display = Some(n),
@@ -90,8 +94,18 @@ pub fn run(opts: Options) -> Result<(), Box<dyn std::error::Error>> {
     let scale = if (opts.scale - 1.0).abs() < 1e-6 { Scale::Integer(1) } else { Scale::Fractional(opts.scale) };
     output.change_current_state(Some(mode), Some(Transform::Normal), Some(scale), Some((0, 0).into()));
     output.set_preferred(mode);
-    state.space.map_output(&output, (0, 0));
-    state.output = Some(output.clone());
+    state.add_output(output.clone(), (0, 0).into());
+    // more screens (--size A,B): to the right of each other, at scale 1
+    let mut x = (w as f64 / opts.scale).round() as i32;
+    for (i, &(mw, mh)) in opts.more.iter().enumerate() {
+        let o = Output::new(format!("HEADLESS-{}", i + 2), PhysicalProperties { size: (0, 0).into(), subpixel: Subpixel::Unknown, make: "loom".into(), model: "headless".into() });
+        let _ = o.create_global::<Loom>(&state.dh);
+        let m = Mode { size: (mw, mh).into(), refresh: 60_000 };
+        o.change_current_state(Some(m), Some(Transform::Normal), Some(Scale::Integer(1)), None);
+        o.set_preferred(m);
+        state.add_output(o, (x, 0).into());
+        x += mw;
+    }
 
     let damage = OutputDamageTracker::from_output(&output);
     let fo = FrameOpts { snapshot: opts.snapshot.clone(), wait: opts.wait, record: opts.record.clone(), size: (w, h) };
@@ -127,7 +141,13 @@ pub fn run(opts: Options) -> Result<(), Box<dyn std::error::Error>> {
                 state.act(&a);
             }
         }
-        if script.is_empty() && state.start.elapsed() >= script_at { TimeoutAction::Drop } else { TimeoutAction::ToDuration(Duration::from_millis(25)) }
+        // input a test sends over IPC (loomtest), after the script
+        if script.is_empty() {
+            if let Some(a) = state.test_input.pop_front() {
+                state.act(&a);
+            }
+        }
+        TimeoutAction::ToDuration(Duration::from_millis(25))
     })?;
 
     // what to run in it
@@ -161,7 +181,7 @@ struct FrameOpts {
 /// The frame loop for a renderer `R` drawing into `target` (pixman image or GPU texture).
 fn frames<R, T>(renderer: Rc<RefCell<R>>, mut target: T, output: Output, mut damage: OutputDamageTracker, fo: FrameOpts) -> impl FnMut(&mut Loom)
 where
-    R: crate::render::LoomRenderer + Bind<T> + Offscreen<T> + ExportMem + 'static,
+    R: crate::render::LoomRenderer + Bind<T> + Bind<smithay::backend::allocator::dmabuf::Dmabuf> + Offscreen<T> + ExportMem + 'static,
     R::TextureId: Texture + Clone + 'static,
     T: 'static,
 {
@@ -186,6 +206,7 @@ where
             let us = t0.elapsed().as_micros() as u64;
             state.stats.render_us += us;
             state.stats.render_max_us = state.stats.render_max_us.max(us);
+            state.shown += 1;
             state.stats.frames += 1;
             if want_png {
                 pixels = read_rgba(&mut *r, &fb, fo.size);
@@ -198,17 +219,7 @@ where
             let _ = save_png(px, fo.size, &dir.join(format!("frame-{:04}-{:06}ms.png", state.frames, state.start.elapsed().as_millis())));
         }
         let now = state.now_ms();
-        for w in state.space.elements() {
-            if !state.wants_frame(w) {
-                continue;
-            }
-            w.send_frame(&output, Duration::from_millis(now as u64), Some(Duration::ZERO), |_, _| Some(output.clone()));
-        }
-        let map = smithay::desktop::layer_map_for_output(&output);
-        for l in map.layers() {
-            l.send_frame(&output, Duration::from_millis(now as u64), Some(Duration::ZERO), |_, _| Some(output.clone()));
-        }
-        drop(map);
+        state.frames_to_all(Duration::from_millis(now as u64));
         state.space.refresh();
         state.popups.cleanup();
         let _ = state.dh.flush_clients();

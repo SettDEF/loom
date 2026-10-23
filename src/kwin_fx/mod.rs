@@ -8,6 +8,8 @@
 //! Which effects: the ones KDE enables by default (metadata EnabledByDefault), changed by
 //! kwinrc [Plugins] <name>Enabled, as KDE does.
 
+pub mod glue;
+
 use std::{
     cell::RefCell,
     collections::HashMap,

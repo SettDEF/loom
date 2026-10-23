@@ -46,8 +46,7 @@ pub fn run(socket: Option<String>, run: Vec<String>) -> Result<(), Box<dyn std::
     let mode = Mode { size, refresh: 60_000 };
     output.change_current_state(Some(mode), Some(Transform::Flipped180), Some(Scale::Integer(1)), Some((0, 0).into()));
     output.set_preferred(mode);
-    state.space.map_output(&output, (0, 0));
-    state.output = Some(output.clone());
+    state.add_output(output.clone(), (0, 0).into());
     state.nested = Some(Nested { backend });
 
     let socket = match &socket {
@@ -57,6 +56,7 @@ pub fn run(socket: Option<String>, run: Vec<String>) -> Result<(), Box<dyn std::
     let socket_name = socket.socket_name().to_string_lossy().to_string();
     state.socket_name = Some(socket_name.clone());
     state.loop_handle = Some(event_loop.handle());
+    state.init_idle();
     // init.lua applied when it changes
     state.watch_config();
     // the user's Hyprland binds (LOOM_HYPR_CONF, else ~/.config/hypr/hyprland.conf)
@@ -111,6 +111,9 @@ pub fn run(socket: Option<String>, run: Vec<String>) -> Result<(), Box<dyn std::
                 let elements = crate::render::elements(state, renderer, &out3, now);
                 if let Ok(r) = damage.render_output(renderer, &mut fb, 0, &elements, [0.08, 0.08, 0.1, 1.0]) {
                     changed = r.damage.cloned();
+                    if changed.as_ref().is_some_and(|d| !d.is_empty()) {
+                        state.shown += 1;
+                    }
                 }
             }
             // window copies for the shell (previews), drawn offscreen with the same renderer
@@ -129,6 +132,7 @@ pub fn run(socket: Option<String>, run: Vec<String>) -> Result<(), Box<dyn std::
             for l in smithay::desktop::layer_map_for_output(&out3).layers() {
                 l.send_frame(&out3, Duration::from_millis(ms as u64), Some(Duration::ZERO), |_, _| Some(out3.clone()));
             }
+            state.lock_frame(&out3, Duration::from_millis(ms as u64));
             state.space.refresh();
             state.popups.cleanup();
         } else if state.captures_ready() {

@@ -38,6 +38,11 @@ pub fn offer(state: &mut Loom, renderer: &GlesRenderer) {
         None => dmabuf_state.create_global::<Loom>(&state.dh, formats),
     };
     state.dmabuf = Some((dmabuf_state, global));
+    // what screen copies can be drawn into on the GPU (ext-image-copy-capture offers them)
+    let render = renderer.egl_context().dmabuf_render_formats();
+    let mods = |f: smithay::backend::allocator::Fourcc| render.iter().filter(|x| x.code == f).map(|x| u64::from(x.modifier)).collect::<Vec<_>>();
+    use smithay::backend::allocator::Fourcc::{Argb8888, Xrgb8888};
+    state.copy_dmabuf = dev.map(|d| (d, vec![(Argb8888 as u32, mods(Argb8888)), (Xrgb8888 as u32, mods(Xrgb8888))]));
 }
 
 impl DmabufHandler for Loom {
@@ -48,7 +53,7 @@ impl DmabufHandler for Loom {
         // a GPU buffer the client made: the renderer takes it, or the client hears it failed
         let ok = match (&mut self.nested, &self.gpu) {
             (Some(n), _) => n.backend.renderer().import_dmabuf(&dmabuf, None).is_ok(),
-            (None, Some(r)) => r.borrow_mut().import_dmabuf(&dmabuf, None).is_ok(),
+            (None, Some(r)) => r.borrow_mut().import_dmabuf(&dmabuf, None).inspect_err(|e| eprintln!("loom: dmabuf import {:?} {:?}: {e:?}", smithay::backend::allocator::Buffer::format(&dmabuf).code, smithay::backend::allocator::Buffer::format(&dmabuf).modifier)).is_ok(),
             _ => false,
         };
         if ok {

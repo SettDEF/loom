@@ -124,14 +124,37 @@ impl Loom {
             "clients" => Some(Value::Array(self.managed.iter().map(|m| self.hypr_client(m)).collect())),
             "activewindow" => Some(self.focused.as_ref().and_then(|w| self.managed_of(w)).map(|m| self.hypr_client(m)).unwrap_or(json!({}))),
             "layers" => Some(self.hypr_layers()),
-            "devices" => Some(json!({ "mice": [], "keyboards": [{ "address": "0x0", "name": "loom-keyboard", "rules": "", "model": "", "layout": "us", "variant": "", "options": "", "active_keymap": "English (US)", "capsLock": false, "numLock": false, "main": true }], "tablets": [], "touch": [], "switches": [] })),
+            // loom's own: who has the keyboard and the pointer, what grabs and drags are open (to
+            // see why a window takes no input)
+            "loomstate" => Some(self.loom_state()),
+            "devices" => {
+                let [model, layout, variant, options] = self.xkb_now();
+                let (active, ..) = self.active_layout();
+                let mods = self.seat.get_keyboard().expect("keyboard").modifier_state();
+                Some(json!({ "mice": self.inputs.all.iter().filter(|d| d.pointer).enumerate().map(|(i, d)| json!({ "address": format!("0x{:x}", i + 1), "name": d.name, "defaultSpeed": 0.0, "scrollFactor": d.scroll })).collect::<Vec<_>>(), "keyboards": [{ "address": "0x0", "name": "loom-keyboard", "rules": "", "model": model, "layout": if layout.is_empty() { "us".into() } else { layout }, "variant": variant, "options": options, "active_keymap": active, "capsLock": mods.caps_lock, "numLock": mods.num_lock, "main": true }], "tablets": [], "touch": [], "switches": [] }))
+            }
             "version" => Some(json!({ "branch": "loom", "commit": env!("CARGO_PKG_VERSION"), "version": "0.56.0", "dirty": false, "commit_message": "loom", "commit_date": "", "tag": "loom", "commits": "0", "buildAquamarine": "", "buildHyprlang": "", "buildHyprutils": "", "buildHyprcursor": "", "buildHyprgraphics": "", "flags": [] })),
             "status" => Some(json!({ "compositor": "loom", "version": env!("CARGO_PKG_VERSION") })),
             "globalshortcuts" => Some(Value::Array(self.proto.shortcuts.iter().map(|s| json!({ "name": format!("{}:{}", s.app_id, s.id), "description": s.description })).collect())),
             "binds" => Some(Value::Array(self.binds.list())),
             "instances" => Some(json!([])),
             "submap" => return if self.binds.submap == "global" { "default".into() } else { self.binds.submap.clone() },
-            "getoption" => Some(json!({ "option": arg, "int": 0, "float": 0.0, "str": "", "set": false })),
+            "getoption" => Some(self.hypr_option(arg)),
+            // loom has no plugins: ii-decor's title bars are built in
+            "plugin" => match arg.split_whitespace().next().unwrap_or("list") {
+                "list" => return if json { "[]".into() } else { "no plugins loaded".into() },
+                _ => return "loom has no plugins: its title bars (ii-decor) are built in".into(),
+            },
+            "iidecor" => match arg.split_whitespace().next().unwrap_or("status") {
+                "reload" => {
+                    self.decor.borrow_mut().reload();
+                    self.relayout();
+                    return "ok".into();
+                }
+                // always JSON, as the plugin prints it (the shell parses it without -j)
+                "status" => return json!({ "plugin": "loom (built in)", "loaded": true }).to_string(),
+                _ => return "ok".into(),
+            },
             "cursorpos" => Some(json!({ "x": self.pointer_at.x as i32, "y": self.pointer_at.y as i32 })),
             "splash" => return "loom".into(),
             "dispatch" => return self.hypr_dispatch(arg),
@@ -143,10 +166,18 @@ impl Loom {
                 } else if let Some(flags) = k.strip_prefix("bind") {
                     let sub = self.binds.submap.clone();
                     self.binds.add(flags, v, &sub);
+                } else {
+                    self.set_keyword(k, v);
                 }
                 return "ok".into();
             }
-            "reload" | "setcursor" | "switchxkblayout" | "notify" | "dismissnotify" | "eval" => return "ok".into(),
+            "eval" => return self.hypr_eval(arg),
+            "switchxkblayout" => return self.switch_layout(arg),
+            "reload" => {
+                self.reload_all();
+                return "ok".into();
+            }
+            "setcursor" | "notify" | "dismissnotify" => return "ok".into(),
             _ => None,
         };
         match value {
@@ -188,9 +219,48 @@ impl Loom {
                 Some(n) => self.switch_workspace(n),
                 None => return format!("invalid workspace {a}"),
             },
-            "movetoworkspace" | "movetoworkspacesilent" => match ws_of(self, a.split(',').next().unwrap_or(a)) {
+            // `N` or `N, address:0x…` (the shell names the window it means; without, the focused one)
+            // test input for a headless loom (scripts/zen-input-probe.sh): `click X,Y`, `rclick X,Y`,
+            // `move X,Y`, `down`, `up`, `drag X,Y,X2,Y2`, `keys TEXT` (as --keys). Refused on a real session.
+            "loomtest" => {
+                if !self.headless {
+                    return "loomtest: only in a headless loom".into();
+                }
+                let (what, rest) = a.split_once(' ').map(|(w, r)| (w, r.trim())).unwrap_or((a, ""));
+                let nums: Vec<f64> = rest.split(',').filter_map(|v| v.trim().parse().ok()).collect();
+                use crate::input::Action as A;
+                match (what, nums.as_slice()) {
+                    ("click", [x, y]) => self.test_input.push_back(A::Click(*x, *y)),
+                    ("rclick", [x, y]) => self.test_input.push_back(A::RightClick(*x, *y)),
+                    ("move", [x, y]) => self.test_input.push_back(A::Move(*x, *y)),
+                    ("down", []) => self.test_input.push_back(A::Button(true)),
+                    ("up", []) => self.test_input.push_back(A::Button(false)),
+                    ("drag", [x, y, x2, y2]) => {
+                        self.test_input.push_back(A::Move(*x, *y));
+                        self.test_input.push_back(A::Button(true));
+                        for i in 1..=8 {
+                            let f = i as f64 / 8.0;
+                            self.test_input.push_back(A::Move(x + (x2 - x) * f, y + (y2 - y) * f));
+                        }
+                        self.test_input.push_back(A::Button(false));
+                    }
+                    ("keys", _) => self.test_input.extend(crate::input::parse_keys(rest)),
+                    _ => return format!("loomtest: {a}?"),
+                }
+            }
+            "movetoworkspace" | "movetoworkspacesilent" => match ws_of(self, a.split(',').next().unwrap_or(a).trim()) {
                 Some(n) => {
-                    self.move_to_workspace(n);
+                    let named = a.split_once(',').map(|(_, s)| s.trim()).filter(|s| !s.is_empty());
+                    let w = match named {
+                        Some(sel) => match self.find_window(sel) {
+                            Some(m) => Some(m.window),
+                            None => return format!("no such window: {sel}"),
+                        },
+                        None => self.focused.clone(),
+                    };
+                    if let Some(w) = w {
+                        self.move_window_to_workspace(&w, n);
+                    }
                     if d == "movetoworkspace" {
                         self.switch_workspace(n);
                     }
@@ -218,13 +288,21 @@ impl Loom {
             }
             "killactive" => {
                 if let Some(w) = self.focused.clone() {
-                    match (w.toplevel(), w.x11_surface()) {
-                        (Some(t), _) => t.send_close(),
-                        (_, Some(x)) => {
-                            let _ = x.close();
-                        }
-                        _ => {}
-                    }
+                    close_window(&w);
+                }
+            }
+            // a window by address:, class:, title:, pid: (or the focused one): asked to close; killwindow kills its program
+            "closewindow" | "killwindow" => {
+                let w = match a.trim() {
+                    "" | "activewindow" => self.focused.clone().and_then(|w| self.managed_of(&w).cloned()),
+                    sel => self.find_window(sel),
+                };
+                let Some(m) = w else { return format!("No such window found: {a}") };
+                if d == "killwindow" && m.pid > 0 {
+                    // SAFETY: a signal to a program loom shows
+                    unsafe { libc::kill(m.pid, libc::SIGKILL) };
+                } else {
+                    close_window(&m.window);
                 }
             }
             "togglefloating" => {
@@ -258,10 +336,9 @@ impl Loom {
             "movecursor" => {
                 let p: Vec<f64> = a.split_whitespace().filter_map(|v| v.parse().ok()).collect();
                 if let [x, y] = p.as_slice() {
-                    let size = self.output.as_ref().and_then(|o| o.current_mode()).map(|m| m.size).unwrap_or_default();
-                    let at = (x.clamp(0.0, size.w as f64 - 1.0), y.clamp(0.0, size.h as f64 - 1.0));
+                    let at = self.clamp_to_outputs((*x, *y).into());
                     let t = self.now_ms();
-                    self.pointer_move(at.into(), t);
+                    self.pointer_move(at, t);
                 }
             }
             // the AwesomeWM layouts' messages (suit, next, mwfact, nmaster, ncol, swapmaster, reset)
@@ -299,9 +376,62 @@ impl Loom {
             "movewindow" => self.move_window(a),
             "pin" => self.toggle_pin(),
             "resizeactive" => self.resize_active(a),
+            // resizewindowpixel SIZE[, WINDOW]: as resizeactive, on that window (focused first)
+            "resizewindowpixel" => {
+                let (size, sel) = a.split_once(',').map(|(s, w)| (s.trim(), w.trim())).unwrap_or((a, ""));
+                if !sel.is_empty() && sel != "activewindow" {
+                    let Some(m) = self.find_window(sel) else { return format!("No such window found: {sel}") };
+                    self.focus_window(&m.window);
+                }
+                self.resize_active(size);
+            }
+            // setfloating / settiled [WINDOW]: floating or tiled, whatever it was
+            "setfloating" | "settiled" => {
+                let sel = a.trim().trim_start_matches(',').trim();
+                let w = match sel {
+                    "" | "activewindow" => self.focused.clone(),
+                    sel => self.find_window(sel).map(|m| m.window),
+                };
+                let Some(w) = w else { return format!("No such window found: {sel}") };
+                let float = d == "setfloating";
+                if let Some(m) = self.managed.iter_mut().find(|m| m.window == w) {
+                    m.floating = float;
+                }
+                self.relayout();
+            }
             "togglespecialworkspace" => self.toggle_special(),
             "sendshortcut" => self.send_shortcut(a),
             "exit" => self.signal.stop(),
+            "dpms" => return self.dpms(a),
+            "focusmonitor" => match self.monitor_arg(a) {
+                Some(o) => {
+                    self.focus_output(&o);
+                    self.pointer_to_middle(&o);
+                    self.focus_next(self.active_ws);
+                }
+                None => return format!("no monitor {a}"),
+            },
+            "moveworkspacetomonitor" => {
+                let (w, m) = a.split_once(' ').unwrap_or((a, ""));
+                match (ws_of(self, w), self.monitor_arg(m)) {
+                    (Some(n), Some(o)) => self.workspace_to_monitor(n, &o),
+                    _ => return format!("moveworkspacetomonitor {a}: which workspace / monitor?"),
+                }
+            }
+            "movecurrentworkspacetomonitor" => match self.monitor_arg(a) {
+                Some(o) => {
+                    let n = self.active_ws;
+                    self.workspace_to_monitor(n, &o);
+                }
+                None => return format!("no monitor {a}"),
+            },
+            "swapactiveworkspaces" => {
+                let (x, y) = a.split_once(' ').unwrap_or((a, ""));
+                match (self.monitor_arg(x), self.monitor_arg(y)) {
+                    (Some(p), Some(q)) => self.swap_active_workspaces(&p, &q),
+                    _ => return format!("swapactiveworkspaces {a}: which monitors?"),
+                }
+            }
             _ => return format!("Invalid dispatcher {d}"),
         }
         "ok".into()
@@ -310,52 +440,96 @@ impl Loom {
     /// A program started in loom: its display and Hyprland signature are loom's.
     pub fn spawn(&self, cmd: &str) -> Option<u32> {
         let mut c = std::process::Command::new("sh");
-        c.arg("-c").arg(cmd).env_remove("DISPLAY");
+        // one of init.lua's own_x programs: loom's own X server, waited for
+        let own = self.own_x_for(cmd);
+        let cmd = match own {
+            Some(n) => crate::own_x::wait_for(n, cmd),
+            None => cmd.to_string(),
+        };
+        c.arg("-c").arg(&cmd).env_remove("DISPLAY");
         if let Some(name) = &self.socket_name {
             c.env("WAYLAND_DISPLAY", name);
         }
         if let Some(h) = &self.hypr {
             c.env("HYPRLAND_INSTANCE_SIGNATURE", &h.signature);
         }
-        if let Some(n) = self.x_display {
+        if let Some(n) = own.or(self.x_display) {
             c.env("DISPLAY", format!(":{n}"));
         }
-        c.spawn().ok().map(|ch| ch.id())
+        let ch = c.spawn().ok()?;
+        let pid = ch.id();
+        self.keep_child(ch);
+        Some(pid)
+    }
+
+    /// A started program kept until it ends, then waited for (no zombies left behind).
+    fn keep_child(&self, ch: std::process::Child) {
+        use std::sync::{atomic::{AtomicBool, Ordering}, Mutex};
+        static CHILDREN: Mutex<Vec<std::process::Child>> = Mutex::new(Vec::new());
+        static REAPING: AtomicBool = AtomicBool::new(false);
+        fn reap() {
+            if let Ok(mut v) = CHILDREN.lock() {
+                v.retain_mut(|c| matches!(c.try_wait(), Ok(None)));
+            }
+        }
+        reap();
+        if let Ok(mut v) = CHILDREN.lock() {
+            v.push(ch);
+        }
+        // a timer collects them every few seconds
+        if let Some(h) = &self.loop_handle {
+            if !REAPING.swap(true, Ordering::Relaxed) {
+                use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
+                let d = std::time::Duration::from_secs(3);
+                let _ = h.insert_source(Timer::from_duration(d), move |_, _, _| {
+                    reap();
+                    TimeoutAction::ToDuration(d)
+                });
+            }
+        }
     }
 
     fn hypr_monitors(&self) -> Value {
-        let Some(o) = &self.output else { return json!([]) };
-        let mode = o.current_mode();
-        let (w, h) = mode.map(|m| (m.size.w, m.size.h)).unwrap_or((0, 0));
-        let props = o.physical_properties();
-        let zone = layer_map_for(o);
-        json!([{
-            "id": 0, "name": o.name(), "description": format!("{} {}", props.make, props.model),
-            "make": props.make, "model": props.model, "serial": "",
-            "width": w, "height": h, "physicalWidth": props.size.w, "physicalHeight": props.size.h,
-            "refreshRate": mode.map(|m| m.refresh as f64 / 1000.0).unwrap_or(60.0),
-            "x": 0, "y": 0,
-            "activeWorkspace": { "id": self.active_ws, "name": self.active_ws.to_string() },
-            "specialWorkspace": { "id": 0, "name": "" },
-            "reserved": zone, "scale": o.current_scale().fractional_scale(), "transform": 0,
-            "focused": true, "dpmsStatus": true, "vrr": false, "solitary": "0", "solitaryBlockedBy": [],
-            "activelyTearing": false, "tearingBlockedBy": [], "directScanoutTo": "0", "directScanoutBlockedBy": [],
-            "disabled": false, "currentFormat": "XRGB8888", "mirrorOf": "none", "availableModes": [format!("{w}x{h}@60.00Hz")],
-        }])
+        Value::Array(self.outputs.iter().enumerate().map(|(i, o)| {
+            let mode = o.current_mode();
+            let (w, h) = mode.map(|m| (m.size.w, m.size.h)).unwrap_or((0, 0));
+            let props = o.physical_properties();
+            let zone = layer_map_for(o);
+            let at = self.space.output_geometry(o).map(|g| g.loc).unwrap_or_default();
+            let ws = self.shown_on.get(&o.name()).copied().unwrap_or(0);
+            let hz = mode.map(|m| m.refresh as f64 / 1000.0).unwrap_or(60.0);
+            json!({
+                "id": i, "name": o.name(), "description": format!("{} {}", props.make, props.model),
+                "make": props.make, "model": props.model, "serial": "",
+                "width": w, "height": h, "physicalWidth": props.size.w, "physicalHeight": props.size.h,
+                "refreshRate": hz,
+                "x": at.x, "y": at.y,
+                "activeWorkspace": { "id": ws, "name": ws.to_string() },
+                "specialWorkspace": { "id": 0, "name": "" },
+                "reserved": zone, "scale": o.current_scale().fractional_scale(), "transform": 0,
+                "focused": self.output.as_ref() == Some(o), "dpmsStatus": !self.screen_off, "vrr": self.vrr_on(&o.name()), "solitary": "0", "solitaryBlockedBy": [],
+                "activelyTearing": false, "tearingBlockedBy": [], "directScanoutTo": "0", "directScanoutBlockedBy": [],
+                "disabled": false, "currentFormat": "XRGB8888", "mirrorOf": "none", "availableModes": [format!("{w}x{h}@{hz:.2}Hz")],
+            })
+        }).collect())
     }
 
     /// Hyprland's form: by monitor, levels 0 (background) to 3 (overlay), each layer's box
     fn hypr_layers(&self) -> Value {
         use smithay::wayland::shell::wlr_layer::Layer as L;
-        let Some(o) = &self.output else { return json!({}) };
-        let map = smithay::desktop::layer_map_for_output(o);
-        let level = |l: L| -> Value {
-            Value::Array(map.layers_on(l).map(|s| {
-                let g = map.layer_geometry(s).unwrap_or_default();
-                json!({ "address": format!("0x{:x}", smithay::reexports::wayland_server::Resource::id(s.wl_surface()).protocol_id()), "x": g.loc.x, "y": g.loc.y, "w": g.size.w, "h": g.size.h, "namespace": s.namespace() })
-            }).collect())
-        };
-        json!({ o.name(): { "levels": { "0": level(L::Background), "1": level(L::Bottom), "2": level(L::Top), "3": level(L::Overlay) } } })
+        let mut all = serde_json::Map::new();
+        for o in &self.outputs {
+            let map = smithay::desktop::layer_map_for_output(o);
+            let at = self.space.output_geometry(o).map(|g| g.loc).unwrap_or_default();
+            let level = |l: L| -> Value {
+                Value::Array(map.layers_on(l).map(|s| {
+                    let g = map.layer_geometry(s).unwrap_or_default();
+                    json!({ "address": format!("0x{:x}", smithay::reexports::wayland_server::Resource::id(s.wl_surface()).protocol_id()), "x": g.loc.x + at.x, "y": g.loc.y + at.y, "w": g.size.w, "h": g.size.h, "namespace": s.namespace() })
+                }).collect())
+            };
+            all.insert(o.name(), json!({ "levels": { "0": level(L::Background), "1": level(L::Bottom), "2": level(L::Top), "3": level(L::Overlay) } }));
+        }
+        Value::Object(all)
     }
 
     fn hypr_workspace(&self, id: i32) -> Value {
@@ -363,7 +537,8 @@ impl Loom {
         let last = here.last();
         json!({
             "id": id, "name": if id == crate::wm::SPECIAL { "special:special".to_string() } else { id.to_string() },
-            "monitor": self.output.as_ref().map(|o| o.name()).unwrap_or_default(), "monitorID": 0,
+            "monitor": self.ws_on.get(&id).cloned().or_else(|| self.output.as_ref().map(|o| o.name())).unwrap_or_default(),
+            "monitorID": self.ws_on.get(&id).map(|n| self.output_id(n)).unwrap_or(0),
             "windows": here.len(), "hasfullscreen": false,
             "lastwindow": last.map(|m| format!("0x{:x}", m.addr)).unwrap_or_else(|| "0x0".into()),
             "lastwindowtitle": last.map(|m| self.title_of(&m.window)).unwrap_or_default(),
@@ -372,17 +547,18 @@ impl Loom {
     }
 
     fn hypr_client(&self, m: &crate::wm::Managed) -> Value {
-        let loc = self.space.element_location(&m.window).unwrap_or_default();
+        // a hidden workspace's window: where it was last shown
+        let loc = self.space.element_location(&m.window).unwrap_or(m.last_at);
         let size = m.window.geometry().size;
         let class = self.class_of(&m.window);
         let title = self.title_of(&m.window);
         json!({
-            "address": format!("0x{:x}", m.addr), "mapped": true, "hidden": m.ws != self.active_ws,
+            "address": format!("0x{:x}", m.addr), "mapped": true, "hidden": !self.is_shown(m.ws),
             "at": [loc.x, loc.y], "size": [size.w, size.h],
             "workspace": { "id": m.ws, "name": m.ws.to_string() },
-            "floating": m.floating, "pseudo": false, "monitor": 0,
+            "floating": m.floating, "pseudo": false, "monitor": self.ws_on.get(&m.ws).map(|n| self.output_id(n)).unwrap_or(0),
             "class": class, "title": title, "initialClass": class, "initialTitle": title,
-            "pid": m.pid, "xwayland": m.window.x11_surface().is_some(), "pinned": false, "fullscreen": 0, "fullscreenClient": 0,
+            "pid": m.pid, "xwayland": m.window.x11_surface().is_some(), "pinned": false, "fullscreen": if self.fullscreen.as_ref() == Some(&m.window) { 2 } else { 0 }, "fullscreenClient": if self.fullscreen.as_ref() == Some(&m.window) { 2 } else { 0 },
             "grouped": [], "tags": [], "swallowing": "0x0",
             "focusHistoryID": if self.focused.as_ref() == Some(&m.window) { 0 } else { 1 },
             "inhibitingIdle": false, "xdgTag": "", "xdgDescription": "", "contentType": "none",
@@ -393,7 +569,9 @@ impl Loom {
 /// How much of each edge the layers keep (Hyprland's `reserved`: left, top, right, bottom).
 fn layer_map_for(o: &smithay::output::Output) -> Value {
     let map = smithay::desktop::layer_map_for_output(o);
-    let full = o.current_mode().map(|m| m.size.to_logical(1)).unwrap_or_default();
+    // the screen in logical units (the zone is logical; its pixels are not)
+    let scale = o.current_scale().fractional_scale();
+    let full = o.current_mode().map(|m| o.current_transform().transform_size(m.size).to_f64().to_logical(scale).to_i32_round::<i32>()).unwrap_or_default();
     let z = map.non_exclusive_zone();
     json!([z.loc.x, z.loc.y, full.w - z.loc.x - z.size.w, full.h - z.loc.y - z.size.h])
 }
@@ -404,5 +582,241 @@ fn plain(v: &Value) -> String {
         Value::Array(a) => a.iter().map(plain).collect::<Vec<_>>().join("\n\n"),
         Value::Object(o) => o.iter().map(|(k, v)| format!("\t{k}: {}", match v { Value::String(s) => s.clone(), other => other.to_string() })).collect::<Vec<_>>().join("\n"),
         other => other.to_string(),
+    }
+}
+
+impl Loom {
+    /// `getoption NAME`: what it is now, typed as Hyprland answers it (int, float or str): a value
+    /// set by `keyword`, else loom's own setting, else the Hyprland config.
+    fn hypr_option(&self, name: &str) -> Value {
+        let name = name.trim();
+        let live = match name {
+            "decoration:rounding" => Some(self.look.rounding.to_string()),
+            "decoration:rounding_power" => Some(self.look.rounding_power.to_string()),
+            "general:gaps_in" => Some(self.look.gaps_in.to_string()),
+            "general:gaps_out" => Some(self.look.gaps_out.to_string()),
+            _ => None,
+        };
+        let v = self.keywords.get(name).cloned().or(live).or_else(|| crate::config::hyprland_values(&crate::config::hyprland_conf()).get(name).cloned());
+        let Some(v) = v else { return json!({ "option": name, "int": 0, "set": false }) };
+        let t = v.trim();
+        let mut o = json!({ "option": name, "set": true });
+        match (t.parse::<i64>(), t.parse::<f64>()) {
+            (Ok(i), _) => o["int"] = json!(i),
+            (_, Ok(f)) if f.fract() == 0.0 => o["int"] = json!(f as i64),
+            (_, Ok(f)) => o["float"] = json!(f),
+            _ => match t {
+                "true" | "yes" | "on" => o["int"] = json!(1),
+                "false" | "no" | "off" => o["int"] = json!(0),
+                _ => o["str"] = json!(t),
+            },
+        }
+        o
+    }
+
+    /// `keyword NAME VALUE`: kept (getoption answers it), and the ones loom acts on applied at once
+    /// (GameMode turns blur, animations, rounding and gaps off and on this way).
+    pub fn set_keyword(&mut self, k: &str, v: &str) {
+        let was = self.keywords.insert(k.to_string(), v.to_string());
+        let on = !matches!(v.trim(), "0" | "false" | "no" | "off");
+        let num = |d: f32| v.trim().parse::<f32>().unwrap_or(d);
+        match k {
+            "decoration:rounding" => self.look.rounding = num(self.look.rounding).max(0.0),
+            "general:gaps_in" => self.look.gaps_in = num(self.look.gaps_in).max(0.0),
+            "general:gaps_out" => self.look.gaps_out = num(self.look.gaps_out).max(0.0),
+            "decoration:blur:enabled" => self.blur.settings.enabled = on,
+            "animations:enabled" => self.layer_cfg.enabled = on,
+            "input:kb_model" | "input:kb_layout" | "input:kb_variant" | "input:kb_options" => {
+                // a layout that does not load is not kept, so devices names the one in use
+                if !self.apply_xkb() {
+                    match was {
+                        Some(w) => self.keywords.insert(k.to_string(), w),
+                        None => self.keywords.remove(k),
+                    };
+                }
+                return;
+            }
+            k if k.starts_with("input:") || k.starts_with("device:") => {
+                let lines = self.input_lines();
+                self.inputs.reapply(&lines);
+                return;
+            }
+            // drawn on the next frame (no layout change)
+            "decoration:screen_shader" => {
+                self.dirty = true;
+                return;
+            }
+            _ => return,
+        }
+        self.relayout();
+    }
+
+    /// The config's input and device lines, the ones set by `keyword` after them.
+    pub fn input_lines(&self) -> Vec<(String, String)> {
+        let mut l = crate::config::hyprland_lines(&crate::config::hyprland_conf());
+        l.extend(self.keywords.iter().filter(|(k, _)| k.starts_with("input:") || k.starts_with("device:")).map(|(k, v)| (k.clone(), v.clone())));
+        l
+    }
+
+    /// The keyboard's model, layouts, variants and options: set by `keyword`, else the config.
+    fn xkb_now(&self) -> [String; 4] {
+        let conf = crate::config::xkb_names();
+        let keys = ["input:kb_model", "input:kb_layout", "input:kb_variant", "input:kb_options"];
+        std::array::from_fn(|i| self.keywords.get(keys[i]).map(|s| s.trim().to_string()).filter(|s| s != "[[EMPTY]]").unwrap_or_else(|| conf[i].clone()))
+    }
+
+    /// The keymap made again from the kb_ options (a bad one is refused and the old one kept).
+    pub fn apply_xkb(&mut self) -> bool {
+        let [model, layout, variant, options] = self.xkb_now();
+        let cfg = smithay::input::keyboard::XkbConfig { model: &model, layout: &layout, variant: &variant, options: Some(options).filter(|o| !o.is_empty()), ..Default::default() };
+        let kb = self.seat.get_keyboard().expect("keyboard");
+        if kb.set_xkb_config(self, cfg).is_err() {
+            eprintln!("loom: keyboard layout {layout:?} ({variant:?}) does not load; kept the old one");
+            return false;
+        }
+        self.layout_changed();
+        true
+    }
+
+    /// The active layout's name (`English (US)`), and its index and how many there are.
+    fn active_layout(&mut self) -> (String, u32, u32) {
+        let kb = self.seat.get_keyboard().expect("keyboard");
+        kb.with_xkb_state(self, |ctx| {
+            let xkb = ctx.xkb().lock().unwrap();
+            let l = xkb.active_layout();
+            (xkb.layout_name(l).to_string(), l.0, xkb.layouts().count() as u32)
+        })
+    }
+
+    fn layout_changed(&mut self) {
+        let (name, ..) = self.active_layout();
+        self.hypr_event(&format!("activelayout>>loom-keyboard,{name}"));
+    }
+
+    /// `switchxkblayout DEVICE next|prev|N` (there is one keyboard, so any device is it).
+    fn switch_layout(&mut self, arg: &str) -> String {
+        let how = arg.split_whitespace().nth(1).unwrap_or("next");
+        let (_, at, n) = self.active_layout();
+        let to = match how {
+            "next" => (at + 1) % n.max(1),
+            "prev" => (at + n.max(1) - 1) % n.max(1),
+            i => match i.parse::<u32>() {
+                Ok(i) if i < n => i,
+                _ => return "error: no such layout".into(),
+            },
+        };
+        let kb = self.seat.get_keyboard().expect("keyboard");
+        kb.with_xkb_state(self, |mut ctx| ctx.set_layout(smithay::input::keyboard::Layout(to)));
+        self.layout_changed();
+        "ok".into()
+    }
+
+    /// The screen shader's file (decoration:screen_shader, live or from the config); "" for none.
+    pub fn screen_shader(&self) -> String {
+        let v = self.keywords.get("decoration:screen_shader").cloned().unwrap_or_else(|| self.shader_conf.clone());
+        let v = v.trim().trim_matches('"').to_string();
+        if v == "[[EMPTY]]" { String::new() } else { v }
+    }
+
+    /// `hyprctl eval`: `hl.config({ section = { key = value } })` sets those options live, as
+    /// `keyword` does (the shell sends its screen shader so).
+    pub fn hypr_eval(&mut self, src: &str) -> String {
+        let Some((name, args)) = crate::hypr_lua::call(src.trim(), "hl.") else { return "ok".into() };
+        // hl.device({ name = "…", scroll_factor = 2 }): that device's settings
+        if name == "device" {
+            if let Some(crate::hypr_lua::Val::Table(t)) = args.first() {
+                let dev = t.get("name").map(|n| n.text().replace(' ', "-")).unwrap_or_default();
+                for (k, v) in t.iter().filter(|(k, _)| *k != "name" && !dev.is_empty()) {
+                    self.set_keyword(&format!("device:{dev}:{k}"), &v.text());
+                }
+            }
+            return "ok".into();
+        }
+        if name != "config" {
+            return "ok".into();
+        }
+        fn flat(prefix: &str, v: &crate::hypr_lua::Val, out: &mut Vec<(String, String)>) {
+            match v {
+                crate::hypr_lua::Val::Table(t) => {
+                    for (k, v) in t {
+                        flat(&if prefix.is_empty() { k.clone() } else { format!("{prefix}:{k}") }, v, out);
+                    }
+                }
+                v => out.push((prefix.to_string(), v.text())),
+            }
+        }
+        let mut set = Vec::new();
+        for a in &args {
+            flat("", a, &mut set);
+        }
+        for (k, v) in set {
+            self.set_keyword(&k, &v);
+        }
+        "ok".into()
+    }
+}
+
+/// A window asked to close (Wayland: its toplevel's close; X: WM_DELETE_WINDOW).
+fn close_window(w: &smithay::desktop::Window) {
+    match (w.toplevel(), w.x11_surface()) {
+        (Some(t), _) => t.send_close(),
+        (_, Some(x)) => {
+            let _ = x.close();
+        }
+        _ => {}
+    }
+}
+
+impl Loom {
+    /// What a surface is, for loomstate: a window (its class and address), a layer, a popup.
+    fn what_is(&self, s: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface) -> String {
+        if let Some(m) = self.managed.iter().find(|m| smithay::wayland::seat::WaylandFocus::wl_surface(&m.window).is_some_and(|w| *w == *s)) {
+            return format!("window {} 0x{:x} ws {}", self.class_of(&m.window), m.addr, m.ws);
+        }
+        if self.layer_output_of(s).is_some() {
+            return format!("layer {}", self.layer_ns(s));
+        }
+        format!("surface {:?}", smithay::reexports::wayland_server::Resource::id(s))
+    }
+
+    pub fn loom_state(&self) -> Value {
+        let kb = self.seat.get_keyboard().and_then(|k| k.current_focus()).and_then(|f| f.surface()).map(|s| self.what_is(&s));
+        let ptr = self.seat.get_pointer().and_then(|p| p.current_focus()).map(|s| self.what_is(&s));
+        let under = self.surface_at(self.pointer_at).map(|(s, _)| self.what_is(&s));
+        json!({
+            "focused": self.focused.as_ref().and_then(|w| self.managed_of(w)).map(|m| format!("{} 0x{:x}", self.class_of(&m.window), m.addr)),
+            "focus_on_map": self.focus_on_map.is_some(),
+            "keyboard": kb,
+            "pointer_focus": ptr,
+            "under_pointer": under,
+            "pointer_at": [self.pointer_at.x as i32, self.pointer_at.y as i32],
+            "pointer_grabbed": self.seat.get_pointer().is_some_and(|p| p.is_grabbed()),
+            "keyboard_grabbed": self.seat.get_keyboard().is_some_and(|k| k.is_grabbed()),
+            "drag": self.drag.as_ref().map(|d| format!("{} button {}", if d.resize { "resize" } else { "move" }, d.button)),
+            "menus_open": self.popup_grab.len(),
+            "focus_grabs": self.proto.grabs.len(),
+            "panels_wanting_keys": self.layer_kb_wanted.len(),
+            "active_ws": self.active_ws,
+            "shown": self.shown_on,
+            "locked": self.locked(),
+            "cursor": self.cursor_info(),
+        })
+    }
+}
+
+impl Loom {
+    /// The cursor image now (for loomstate): the theme's shape, or a program's surface with its
+    /// buffer size and scale, the size loom works out for it, and whether it is an X program's.
+    fn cursor_info(&self) -> Value {
+        use smithay::input::pointer::CursorImageStatus;
+        match &self.cursor_status {
+            CursorImageStatus::Hidden => json!("hidden"),
+            CursorImageStatus::Named(n) => json!(format!("named {}", n.name())),
+            CursorImageStatus::Surface(s) => {
+                let from_x = smithay::reexports::wayland_server::Resource::client(s).is_some_and(|c| self.x.client.as_ref().is_some_and(|x| x.id() == c.id()));
+                let (buf, bscale, logical) = smithay::backend::renderer::utils::with_renderer_surface_state(s, |st| (st.buffer_size().map(|b| [b.w, b.h]), st.buffer_scale(), st.surface_size().map(|z| [z.w, z.h]))).unwrap_or((None, 0, None));
+                json!({ "from_x": from_x, "buffer": buf, "buffer_scale": bscale, "logical": logical, "x_scale": self.x_client_scale(), "client": smithay::reexports::wayland_server::Resource::client(s).map(|c| format!("{:?}", c.id())) })
+            }
+        }
     }
 }

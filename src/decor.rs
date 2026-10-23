@@ -67,6 +67,8 @@ pub struct Conf {
     title_weight: u16,
     title_font: String,
     pub double_click: bool,
+    /// glass: the window behind the bar blurred (ii-decor's `blur`)
+    pub blur: bool,
     pub minimize_to: String,
     icon: bool,
     icon_size: f32,
@@ -178,6 +180,7 @@ impl Conf {
             title_weight: num("titleWeight", 500.0) as u16,
             title_font: v["titleFont"].as_str().unwrap_or("sans-serif").to_string(),
             double_click: flag("doubleClick", true),
+            blur: flag("blur", false),
             minimize_to: v["minimizeTo"].as_str().unwrap_or("special").to_string(),
             icon: flag("icon", true),
             icon_size: num("iconSize", 16.0),
@@ -501,6 +504,10 @@ mod tests {
 impl crate::state::Loom {
     /// What window `w` gets from ii-decor (none while fullscreen).
     pub fn decor_kind(&self, w: &smithay::desktop::Window) -> Kind {
+        // an X menu or dropdown (Bitwig's) gets no title bar
+        if w.x11_surface().is_some_and(crate::xwayland::x_menu_like) {
+            return Kind::None;
+        }
         self.decor.borrow().conf.kind(&self.class_of(w), self.fullscreen.as_ref() == Some(w))
     }
 
@@ -609,6 +616,8 @@ impl crate::state::Loom {
     pub fn toggle_maximize(&mut self, w: &smithay::desktop::Window) {
         self.maximized = if self.maximized.as_ref() == Some(w) { None } else { Some(w.clone()) };
         self.relayout();
+        let on = self.maximized.as_ref() == Some(w);
+        self.fx_event("windowMaximizedStateChanged", w, &[on.into(), on.into()]);
         self.foreign_all_changed();
     }
 }

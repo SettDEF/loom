@@ -17,10 +17,22 @@ pub enum Action {
     /// `<W-x>`: x with Super held (Super = 125)
     Chord { held: u32, code: u32 },
     Click(f64, f64),
+    /// `--rclick X,Y`: the right button there (context menus)
+    RightClick(f64, f64),
     /// `--sdrag X,Y,X2,Y2[,BUTTON]`: a Super+drag (a mouse bind), button 272 left / 273 right
     SuperDrag { from: (f64, f64), to: (f64, f64), button: u32 },
     /// `--sscroll X,Y,up|down`: Super+scroll there
     SuperScroll { at: (f64, f64), down: bool },
+    /// `--scroll X,Y,DY[,wheel]`: a two-finger scroll there (small steps, then its stop), or one wheel notch
+    Scroll { at: (f64, f64), dy: f64, wheel: bool },
+    /// `<down-x>` / `<up-x>`: a key held, let go later (key repeat tests)
+    KeyDown(u32),
+    KeyUp(u32),
+    /// `<wait-N>`: one idle 25 ms step (N ms is N/25 of them)
+    Wait,
+    /// `--drag X,Y,X2,Y2`: the pointer there, the left button held or let go (a plain drag, in steps)
+    Move(f64, f64),
+    Button(bool),
 }
 
 /// A US-layout key for a character: (evdev code, shifted).
@@ -47,7 +59,7 @@ fn key_of(c: char) -> Option<(u32, bool)> {
     }
 }
 
-/// `--keys` text into actions: characters, and <CR> <Tab> <BS> <Esc> <C-x>.
+/// `--keys` text into actions: characters, and <CR> <Tab> <BS> <Esc> <Space> <Up> <Down> <Left> <Right> <Home> <End> <PageUp> <PageDown> <C-x>.
 pub fn parse_keys(s: &str) -> Vec<Action> {
     let mut out = Vec::new();
     let mut rest = s;
@@ -60,12 +72,32 @@ pub fn parse_keys(s: &str) -> Vec<Action> {
                     rest = &rest[end + 1..];
                     continue;
                 }
+                // a key held (<down-a>), let go (<up-a>), time passing (<wait-800>)
+                if let Some(c) = name.strip_prefix("down-").or(name.strip_prefix("up-")).filter(|c| c.chars().count() == 1).and_then(|c| key_of(c.chars().next().unwrap_or(' '))) {
+                    out.push(if name.starts_with("down-") { Action::KeyDown(c.0) } else { Action::KeyUp(c.0) });
+                    rest = &rest[end + 1..];
+                    continue;
+                }
+                if let Some(ms) = name.strip_prefix("wait-").and_then(|n| n.parse::<u32>().ok()) {
+                    out.extend(std::iter::repeat_n(Action::Wait, (ms / 25).max(1) as usize));
+                    rest = &rest[end + 1..];
+                    continue;
+                }
                 let named = match name {
                     "CR" | "Enter" => Some((28, false, false)),
                     "Tab" => Some((15, false, false)),
                     "BS" => Some((14, false, false)),
                     "Esc" => Some((1, false, false)),
                     "Space" => Some((57, false, false)),
+                    // arrows and paging (menus, dropdowns, lists)
+                    "Up" => Some((103, false, false)),
+                    "Down" => Some((108, false, false)),
+                    "Left" => Some((105, false, false)),
+                    "Right" => Some((106, false, false)),
+                    "Home" => Some((102, false, false)),
+                    "End" => Some((107, false, false)),
+                    "PageUp" => Some((104, false, false)),
+                    "PageDown" => Some((109, false, false)),
                     "Super" | "W" => Some((125, false, false)),
                     n if n.starts_with("C-") && n.chars().count() == 3 => key_of(n.chars().nth(2).unwrap_or(' ')).map(|(k, s)| (k, s, true)),
                     _ => None,
@@ -110,10 +142,20 @@ impl Loom {
                 self.key_input(Keycode::new(code + 8), KeyState::Released, time);
                 self.key_input(Keycode::new(held + 8), KeyState::Released, time);
             }
+            Action::KeyDown(code) => self.key_input(Keycode::new(code + 8), KeyState::Pressed, time),
+            Action::KeyUp(code) => self.key_input(Keycode::new(code + 8), KeyState::Released, time),
+            Action::Wait => {}
+            Action::Move(x, y) => self.pointer_move((x, y).into(), time),
+            Action::Button(down) => self.pointer_button(0x110, down, time),
             Action::Click(x, y) => {
                 self.pointer_move((x, y).into(), time);
                 self.pointer_button(0x110, true, time);
                 self.pointer_button(0x110, false, time);
+            }
+            Action::RightClick(x, y) => {
+                self.pointer_move((x, y).into(), time);
+                self.pointer_button(0x111, true, time);
+                self.pointer_button(0x111, false, time);
             }
             Action::SuperDrag { from, to, button } => {
                 // Super held, the button down at `from`, moved there in steps, let go
@@ -126,6 +168,17 @@ impl Loom {
                 }
                 self.pointer_button(button, false, time);
                 self.key_input(Keycode::new(125 + 8), KeyState::Released, time);
+            }
+            Action::Scroll { at, dy, wheel } => {
+                self.pointer_move(at.into(), time);
+                if wheel {
+                    self.pointer_scroll(smithay::backend::input::AxisSource::Wheel, dy, 0.0, Some((dy.signum() * 120.0, 0.0)), time);
+                } else {
+                    for _ in 0..10 {
+                        self.pointer_scroll(smithay::backend::input::AxisSource::Finger, dy / 10.0, 0.0, None, time);
+                    }
+                    self.pointer_scroll(smithay::backend::input::AxisSource::Finger, 0.0, 0.0, None, time);
+                }
             }
             Action::SuperScroll { at, down } => {
                 self.key_input(Keycode::new(125 + 8), KeyState::Pressed, time);
@@ -145,6 +198,8 @@ mod tests {
     fn keys_parse() {
         assert_eq!(parse_keys("aB<CR>"), vec![Action::Key { code: 30, shift: false, ctrl: false }, Action::Key { code: 48, shift: true, ctrl: false }, Action::Key { code: 28, shift: false, ctrl: false }]);
         assert_eq!(parse_keys("<C-c>"), vec![Action::Key { code: 46, shift: false, ctrl: true }]);
+        assert_eq!(parse_keys("<Down><Up>"), vec![Action::Key { code: 108, shift: false, ctrl: false }, Action::Key { code: 103, shift: false, ctrl: false }]);
         assert_eq!(parse_keys("!"), vec![Action::Key { code: 2, shift: true, ctrl: false }]);
+        assert_eq!(parse_keys("<down-a><wait-50><up-a>"), vec![Action::KeyDown(30), Action::Wait, Action::Wait, Action::KeyUp(30)]);
     }
 }

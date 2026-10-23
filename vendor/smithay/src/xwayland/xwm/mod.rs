@@ -1159,6 +1159,8 @@ impl X11Wm {
                 .set_selection_owner(x11rb::NONE, selection.atom, selection.timestamp)?;
         }
 
+        // loom: sent now, or X keeps the old owner until something else flushes
+        self.conn.flush()?;
         Ok(())
     }
 

@@ -1,0 +1,13 @@
+#!/bin/sh
+# brightnessctl in the loom sandbox: reading works here (sysfs), setting needs logind on the system
+# bus the sandbox has none of, so a set runs outside, started by loom (its Hyprland IPC)
+for a in "$@"; do
+  case "$a" in
+    s | set)
+      q=""
+      for b in "$@"; do q="$q '$(printf %s "$b" | sed "s/'/'\\\\''/g")'"; done
+      exec hyprctl dispatch exec "brightnessctl$q" >/dev/null
+      ;;
+  esac
+done
+exec /usr/bin/brightnessctl "$@"

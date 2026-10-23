@@ -76,6 +76,8 @@ pub struct HyprProto {
     /// what each hyprland_surface_v1 is for
     surface_of: HashMap<ObjectId, ObjectId>,
     pub lock_notes: Vec<HyprlandLockNotificationV1>,
+    /// colour matrices set but not committed yet (by screen name)
+    pub ctm_pending: std::collections::HashMap<String, [f64; 9]>,
 }
 
 /// The globals, made once.
@@ -135,20 +137,25 @@ impl Dispatch<HyprlandFocusGrabV1, ()> for Loom {
             }
             grab_g::Request::RemoveSurface { surface } => g.pending.retain(|s| s != &surface),
             grab_g::Request::Commit => {
-                g.surfaces = g.pending.clone();
-                let first = g.surfaces.first().cloned();
+                let old = std::mem::replace(&mut g.surfaces, g.pending.clone());
+                // the newest one: the panel just opened (the bar comes first in the shell's list)
+                let first = g.surfaces.last().cloned();
                 // the keyboard goes into the grab, unless it is in it already
                 let kb = state.seat.get_keyboard().expect("keyboard");
                 let inside = kb.current_focus().and_then(|f| f.surface()).is_some_and(|f| state.proto.grabs.iter().any(|g| g.surfaces.contains(&f)));
-                if let (Some(s), false) = (first, inside) {
+                if let (Some(s), false, false) = (first, inside, state.locked()) {
                     kb.set_focus(state, Some(s.into()), smithay::utils::SERIAL_COUNTER.next_serial());
                 }
+                // a panel taken out of the grab (closed) gives the keyboard back
+                state.grab_released(&old);
             }
             _ => {}
         }
     }
     fn destroyed(state: &mut Self, _: ClientId, resource: &HyprlandFocusGrabV1, _: &()) {
+        let old: Vec<_> = state.proto.grabs.iter().filter(|g| &g.obj == resource).flat_map(|g| g.surfaces.clone()).collect();
         state.proto.grabs.retain(|g| &g.obj != resource);
+        state.grab_released(&old);
     }
 }
 
@@ -180,7 +187,12 @@ impl Dispatch<HyprlandSurfaceV1, ()> for Loom {
 impl Dispatch<HyprlandLockNotifierV1, ()> for Loom {
     fn request(state: &mut Self, _: &Client, _: &HyprlandLockNotifierV1, request: lock_m::Request, _: &(), _: &DisplayHandle, data_init: &mut DataInit<'_, Self>) {
         if let lock_m::Request::GetLockNotification { id } = request {
-            state.proto.lock_notes.push(data_init.init(id, ()));
+            let n = data_init.init(id, ());
+            // locked already: it hears so at once
+            if state.locked() {
+                n.locked();
+            }
+            state.proto.lock_notes.push(n);
         }
     }
 }
@@ -193,7 +205,28 @@ impl Dispatch<HyprlandLockNotificationV1, ()> for Loom {
 }
 
 impl Dispatch<HyprlandCtmControlManagerV1, ()> for Loom {
-    fn request(_: &mut Self, _: &Client, _: &HyprlandCtmControlManagerV1, _: ctm_m::Request, _: &(), _: &DisplayHandle, _: &mut DataInit<'_, Self>) {}
+    fn request(state: &mut Self, _: &Client, _: &HyprlandCtmControlManagerV1, request: ctm_m::Request, _: &(), _: &DisplayHandle, _: &mut DataInit<'_, Self>) {
+        match request {
+            // a colour matrix for a screen (hyprsunset's night light), applied on commit
+            ctm_m::Request::SetCtmForOutput { output, mat0, mat1, mat2, mat3, mat4, mat5, mat6, mat7, mat8 } => {
+                if let Some(o) = smithay::output::Output::from_resource(&output) {
+                    state.proto.ctm_pending.insert(o.name(), [mat0, mat1, mat2, mat3, mat4, mat5, mat6, mat7, mat8]);
+                }
+            }
+            ctm_m::Request::Commit => {
+                for (name, m) in std::mem::take(&mut state.proto.ctm_pending) {
+                    state.set_ctm(&name, m);
+                }
+            }
+            _ => {}
+        }
+    }
+    // its client gone: the screens back to their own colours, as Hyprland does
+    fn destroyed(state: &mut Self, _: ClientId, _: &HyprlandCtmControlManagerV1, _: &()) {
+        for o in state.outputs.clone() {
+            state.set_ctm(&o.name(), [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]);
+        }
+    }
 }
 
 impl Loom {
@@ -229,9 +262,12 @@ impl Loom {
     /// The window's or layer's own surface under `at` (not a popup's or subsurface's).
     pub fn root_at(&self, at: smithay::utils::Point<f64, smithay::utils::Logical>) -> Option<WlSurface> {
         use smithay::wayland::shell::wlr_layer::Layer as L;
-        let output = self.output.as_ref()?;
-        let map = smithay::desktop::layer_map_for_output(output);
-        let layer = |which: &[L]| which.iter().find_map(|l| map.layer_under(*l, at).map(|s| s.wl_surface().clone()));
+        // the screen under it; its layers' boxes are relative to it
+        let output = self.output_at(at).or_else(|| self.output.clone())?;
+        let off = self.space.output_geometry(&output).map(|g| g.loc.to_f64()).unwrap_or_default();
+        let map = smithay::desktop::layer_map_for_output(&output);
+        // by each layer's input region, not its box (a mostly see-through bar is not "under" every click)
+        let layer = |which: &[L]| crate::state::layer_input_at(&map, which, at - off).map(|(ly, _, _)| ly.wl_surface().clone());
         layer(&[L::Overlay, L::Top])
             .or_else(|| self.space.element_under(at).and_then(|(w, _)| w.toplevel().map(|t| t.wl_surface().clone()).or_else(|| w.x11_surface().and_then(|x| x.wl_surface()))))
             .or_else(|| layer(&[L::Bottom, L::Background]))
@@ -294,4 +330,61 @@ impl Dispatch<HyprlandToplevelMappingManagerV1, ()> for Loom {
 
 impl Dispatch<HyprlandToplevelWindowMappingHandleV1, ()> for Loom {
     fn request(_: &mut Self, _: &Client, _: &HyprlandToplevelWindowMappingHandleV1, _: map_h::Request, _: &(), _: &DisplayHandle, _: &mut DataInit<'_, Self>) {}
+}
+
+/// What holds a global shortcut down: a key (its keycode) or a mouse button.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Held {
+    Key(u32),
+    Button(u32),
+}
+
+/// The global shortcuts among `actions` (`global app:name`), held by `by` from now on.
+fn hold(list: &mut Vec<(Held, String)>, by: Held, actions: &[String]) {
+    for a in actions {
+        if let Some(name) = a.strip_prefix("global ") {
+            let name = name.trim().to_string();
+            if !list.iter().any(|(h, n)| *h == by && *n == name) {
+                list.push((by, name));
+            }
+        }
+    }
+}
+
+/// `by` came up: the shortcuts it held, taken off the list.
+fn let_go(list: &mut Vec<(Held, String)>, by: Held) -> Vec<String> {
+    let (up, keep): (Vec<_>, Vec<_>) = std::mem::take(list).into_iter().partition(|(h, _)| *h == by);
+    *list = keep;
+    up.into_iter().map(|(_, n)| n).collect()
+}
+
+impl Loom {
+    /// After a bind ran `actions` on the press of `by`: its global shortcuts are held until `by` is let go.
+    pub fn hold_globals(&mut self, by: Held, actions: &[String]) {
+        hold(&mut self.globals_held, by, actions);
+    }
+
+    /// `by` came up: the global shortcuts it pressed are released.
+    pub fn release_globals(&mut self, by: Held) {
+        for name in let_go(&mut self.globals_held, by) {
+            self.global_shortcut(&name, false);
+        }
+    }
+}
+
+#[cfg(test)]
+mod held_tests {
+    use super::{hold, let_go, Held};
+
+    #[test]
+    fn a_global_is_released_by_what_pressed_it_only() {
+        let mut l = Vec::new();
+        // Super+left drag: the shell's shortcut and the drag itself
+        hold(&mut l, Held::Button(272), &["global quickshell:windowDrag".into(), "__drag move".into()]);
+        hold(&mut l, Held::Key(125), &["exec foo".into()]);
+        assert_eq!(l.len(), 1, "only the global is held");
+        assert!(let_go(&mut l, Held::Key(125)).is_empty(), "another key lets nothing go");
+        assert_eq!(let_go(&mut l, Held::Button(272)), vec!["quickshell:windowDrag".to_string()]);
+        assert!(l.is_empty() && let_go(&mut l, Held::Button(272)).is_empty(), "released once");
+    }
 }
