@@ -15,6 +15,8 @@ const PAM_PROMPT_ECHO_ON: c_int = 2;
 const PAM_ERROR_MSG: c_int = 3;
 const PAM_TEXT_INFO: c_int = 4;
 const PAM_CONV_ERR: c_int = 19;
+const PAM_ESTABLISH_CRED: c_int = 0x2;
+const PAM_DELETE_CRED: c_int = 0x4;
 
 #[repr(C)]
 struct PamMessage {
@@ -43,6 +45,11 @@ unsafe extern "C" {
     fn pam_acct_mgmt(handle: *mut c_void, flags: c_int) -> c_int;
     fn pam_end(handle: *mut c_void, status: c_int) -> c_int;
     fn pam_strerror(handle: *mut c_void, err: c_int) -> *const c_char;
+    fn pam_setcred(handle: *mut c_void, flags: c_int) -> c_int;
+    fn pam_open_session(handle: *mut c_void, flags: c_int) -> c_int;
+    fn pam_close_session(handle: *mut c_void, flags: c_int) -> c_int;
+    fn pam_putenv(handle: *mut c_void, name_value: *const c_char) -> c_int;
+    fn pam_getenvlist(handle: *mut c_void) -> *mut *mut c_char;
 }
 
 /// What the conversation needs: the password to give, the messages PAM said (shown to the user).
@@ -78,17 +85,31 @@ extern "C" fn converse(n: c_int, msgs: *mut *const PamMessage, out: *mut *mut Pa
     PAM_SUCCESS
 }
 
+/// A PAM transaction that passed: kept for the session it opens (pam_end when dropped).
+struct Pam {
+    h: *mut c_void,
+    _talk: Box<Talk>,
+}
+
+impl Drop for Pam {
+    fn drop(&mut self) {
+        // Safety: our handle, ended once
+        unsafe { pam_end(self.h, PAM_SUCCESS) };
+    }
+}
+
 /// The password checked by PAM's `service` for `user` (and the account allowed now: not expired).
-fn pam_check(service: &str, user: &str, password: String) -> Result<(), String> {
+fn pam_login(service: &str, user: &str, password: String) -> Result<Pam, String> {
     let (Ok(svc), Ok(usr)) = (CString::new(service), CString::new(user)) else { return Err("bad name".into()) };
     let mut bytes = password.into_bytes();
     let pw = CString::new(bytes.clone()).map_err(|_| "bad password".to_string());
     bytes.fill(0);
-    let mut talk = Talk { password: pw?, said: Vec::new() };
-    let conv = PamConv { conv: converse, appdata: &mut talk as *mut Talk as *mut c_void };
+    let mut talk = Box::new(Talk { password: pw?, said: Vec::new() });
+    // Linux-PAM copies the conv struct; appdata (the boxed Talk) lives in Pam as long as the handle
+    let conv = PamConv { conv: converse, appdata: &mut *talk as *mut Talk as *mut c_void };
     let mut h: *mut c_void = std::ptr::null_mut();
-    // Safety: plain PAM calls on a handle we started and end here; talk outlives them
-    let r = unsafe {
+    // Safety: plain PAM calls on a handle we started; ended on failure here, else by Pam's drop
+    let (r, why) = unsafe {
         let mut r = pam_start(svc.as_ptr(), usr.as_ptr(), &conv, &mut h);
         if r == PAM_SUCCESS {
             r = pam_authenticate(h, 0);
@@ -97,18 +118,18 @@ fn pam_check(service: &str, user: &str, password: String) -> Result<(), String> 
             r = pam_acct_mgmt(h, 0);
         }
         let why = if r == PAM_SUCCESS { String::new() } else { CStr::from_ptr(pam_strerror(h, r)).to_string_lossy().into_owned() };
-        if !h.is_null() {
+        if r != PAM_SUCCESS && !h.is_null() {
             pam_end(h, r);
         }
         (r, why)
     };
-    // the password's bytes cleared before the memory goes back
+    // the password's bytes cleared: PAM has asked for it already
     let mut left = std::mem::take(&mut talk.password).into_bytes_with_nul();
     left.fill(0);
-    if r.0 == PAM_SUCCESS {
-        Ok(())
+    if r == PAM_SUCCESS {
+        Ok(Pam { h, _talk: talk })
     } else {
-        Err(talk.said.pop().unwrap_or(r.1))
+        Err(talk.said.pop().unwrap_or(why))
     }
 }
 
@@ -127,25 +148,192 @@ struct Opts {
     service: String,
     allow_uid: u32,
     mock: Option<(String, String)>,
+    /// what the session runs, by the user's login shell (-l -c)
+    session: String,
+    vt: Option<u32>,
 }
 
-fn answer(o: &Opts, line: &str) -> serde_json::Value {
-    let Ok(mut req) = serde_json::from_str::<serde_json::Value>(line) else { return serde_json::json!({ "ok": false, "message": "bad request" }) };
+/// The user's passwd entry: uid, gid, home, shell.
+struct User {
+    name: CString,
+    uid: u32,
+    gid: u32,
+    home: String,
+    shell: String,
+}
+
+fn user(name: &str) -> Option<User> {
+    let c = CString::new(name).ok()?;
+    // Safety: getpwnam's result is read at once, before another passwd call
+    unsafe {
+        let p = libc::getpwnam(c.as_ptr());
+        if p.is_null() {
+            return None;
+        }
+        let s = |x: *const c_char| CStr::from_ptr(x).to_string_lossy().into_owned();
+        Some(User { name: c.clone(), uid: (*p).pw_uid, gid: (*p).pw_gid, home: s((*p).pw_dir), shell: s((*p).pw_shell) })
+    }
+}
+
+/// The session's process: as the user (groups, gid, uid dropped in that order), in their home, the
+/// environment PAM gave (pam_systemd's XDG_RUNTIME_DIR, XDG_SESSION_ID …) and the login basics,
+/// the session command run by their login shell. Only returns on failure.
+fn exec_session(u: &User, env: &[String], cmd: &str) -> std::io::Error {
+    use std::os::unix::process::CommandExt;
+    let mut c = std::process::Command::new(&u.shell);
+    c.arg("-l").arg("-c").arg(cmd).current_dir(&u.home).env_clear();
+    for kv in env {
+        if let Some((k, v)) = kv.split_once('=') {
+            c.env(k, v);
+        }
+    }
+    let name = u.name.to_string_lossy().into_owned();
+    c.env("HOME", &u.home).env("USER", &name).env("LOGNAME", &name).env("SHELL", &u.shell).env("PATH", "/usr/local/bin:/usr/bin");
+    // Safety: getuid has no preconditions
+    if unsafe { libc::getuid() } == 0 {
+        let (uid, gid, name) = (u.uid, u.gid, u.name.clone());
+        // Safety: async-signal-safe calls only, in the child before exec
+        unsafe {
+            c.pre_exec(move || {
+                if libc::initgroups(name.as_ptr(), gid) != 0 || libc::setgid(gid) != 0 || libc::setuid(uid) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+    }
+    c.exec()
+}
+
+/// After a sign-in, the session: as root through PAM (credentials, pam_open_session: logind makes
+/// the session, the runtime dir), in a worker process that waits for it and closes it; as an
+/// ordinary user (tests) the command only. The worker's pid is returned.
+fn start_session(o: &Opts, name: &str, pam: Option<Pam>) -> Result<u32, String> {
+    let u = user(name).ok_or_else(|| format!("no user {name}"))?;
+    // Safety: fork in a single-threaded program; the child only does PAM and exec
+    let pid = unsafe { libc::fork() };
+    if pid < 0 {
+        return Err(std::io::Error::last_os_error().to_string());
+    }
+    if pid > 0 {
+        // the transaction is the worker's now (its copy); ours goes without closing anything
+        if let Some(p) = pam {
+            std::mem::forget(p);
+        }
+        return Ok(pid as u32);
+    }
+    // the worker
+    let fail = |m: String| -> ! {
+        eprintln!("loom-auth: session for {name}: {m}");
+        std::process::exit(1)
+    };
+    let mut env: Vec<String> = Vec::new();
+    if let Some(p) = &pam {
+        let vt = o.vt.map(|v| v.to_string()).unwrap_or_default();
+        // pam_systemd reads these for the logind session it makes
+        for kv in ["XDG_SESSION_TYPE=wayland", "XDG_SESSION_CLASS=user", "XDG_SESSION_DESKTOP=loom", "XDG_CURRENT_DESKTOP=loom", "XDG_SEAT=seat0", &format!("XDG_VTNR={vt}")] {
+            if kv.ends_with('=') {
+                continue;
+            }
+            let c = CString::new(kv).unwrap_or_default();
+            // Safety: our handle, a valid C string PAM copies
+            unsafe { pam_putenv(p.h, c.as_ptr()) };
+        }
+        // Safety: our handle; the env list is malloc'd strings PAM gives us to free
+        unsafe {
+            let r = pam_setcred(p.h, PAM_ESTABLISH_CRED);
+            if r != PAM_SUCCESS {
+                fail(format!("setcred: {}", CStr::from_ptr(pam_strerror(p.h, r)).to_string_lossy()));
+            }
+            let r = pam_open_session(p.h, 0);
+            if r != PAM_SUCCESS {
+                fail(format!("open_session: {}", CStr::from_ptr(pam_strerror(p.h, r)).to_string_lossy()));
+            }
+            let list = pam_getenvlist(p.h);
+            if !list.is_null() {
+                let mut i = 0;
+                while !(*list.add(i)).is_null() {
+                    env.push(CStr::from_ptr(*list.add(i)).to_string_lossy().into_owned());
+                    libc::free(*list.add(i) as *mut c_void);
+                    i += 1;
+                }
+                libc::free(list as *mut c_void);
+            }
+        }
+    } else {
+        // tests: this user's own environment (the runtime dir, the display)
+        env = std::env::vars().map(|(k, v)| format!("{k}={v}")).collect();
+    }
+    eprintln!("loom-auth: session for {name}: {}", o.session);
+    // Safety: fork again: the session process, the worker waits for it
+    let child = unsafe { libc::fork() };
+    if child == 0 {
+        let e = exec_session(&u, &env, &o.session);
+        eprintln!("loom-auth: session for {name} did not start: {e}");
+        std::process::exit(127);
+    }
+    let mut status = 0;
+    // Safety: waiting for our own child
+    unsafe { libc::waitpid(child, &mut status, 0) };
+    eprintln!("loom-auth: session for {name} ended ({status})");
+    if let Some(p) = &pam {
+        // Safety: our handle
+        unsafe {
+            pam_close_session(p.h, 0);
+            pam_setcred(p.h, PAM_DELETE_CRED);
+        }
+    }
+    drop(pam);
+    std::process::exit(0)
+}
+
+/// One sign-in: {user, password} → {ok} or {ok: false, message}; after ok, {start: true} →
+/// {started: true}: the greeter took its last picture first (the new session's curtain).
+fn serve(o: &Opts, s: &UnixStream) {
+    let mut rd = BufReader::new(s);
+    let mut line = String::new();
+    // one line, at most 4 KiB (a password is not longer)
+    if (&mut rd).take(4096).read_line(&mut line).is_err() {
+        return;
+    }
+    let Ok(mut req) = serde_json::from_str::<serde_json::Value>(&line) else {
+        let _ = writeln!(&*s, "{}", serde_json::json!({ "ok": false, "message": "bad request" }));
+        return;
+    };
+    line.clear();
     let user = req["user"].as_str().unwrap_or("").to_string();
     let password = req["password"].as_str().unwrap_or("").to_string();
     req["password"] = serde_json::Value::Null;
     let r = match &o.mock {
-        Some((u, p)) => (user == *u && password == *p).then_some(()).ok_or_else(|| "Authentication failure".to_string()),
-        None => pam_check(&o.service, &user, password),
+        Some((u, p)) => (user == *u && password == *p).then_some(None).ok_or_else(|| "Authentication failure".to_string()),
+        None => pam_login(&o.service, &user, password).map(Some),
     };
-    match r {
-        Ok(()) => {
-            eprintln!("loom-auth: {user} signed in");
-            serde_json::json!({ "ok": true })
-        }
+    let pam = match r {
+        Ok(p) => p,
         Err(m) => {
             eprintln!("loom-auth: {user}: {m}");
-            serde_json::json!({ "ok": false, "message": m })
+            let _ = writeln!(&*s, "{}", serde_json::json!({ "ok": false, "message": m }));
+            return;
+        }
+    };
+    eprintln!("loom-auth: {user} signed in");
+    if writeln!(&*s, "{}", serde_json::json!({ "ok": true })).is_err() {
+        return;
+    }
+    // the greeter's "start" (after its pictures); a closed connection or anything else: no session
+    let _ = s.set_read_timeout(Some(std::time::Duration::from_secs(30)));
+    if (&mut rd).take(4096).read_line(&mut line).is_err() || !serde_json::from_str::<serde_json::Value>(&line).is_ok_and(|v| v["start"] == true) {
+        eprintln!("loom-auth: {user}: no start asked, no session");
+        return;
+    }
+    let pam = if unsafe { libc::getuid() } == 0 { pam } else { None };
+    match start_session(o, &user, pam) {
+        Ok(pid) => {
+            let _ = writeln!(&*s, "{}", serde_json::json!({ "started": true, "pid": pid }));
+        }
+        Err(m) => {
+            eprintln!("loom-auth: session for {user}: {m}");
+            let _ = writeln!(&*s, "{}", serde_json::json!({ "started": false, "message": m }));
         }
     }
 }
@@ -153,7 +341,14 @@ fn answer(o: &Opts, line: &str) -> serde_json::Value {
 fn main() {
     // Safety: getuid has no preconditions
     let me = unsafe { libc::getuid() };
-    let mut o = Opts { socket: "/run/loom/auth.sock".into(), service: "loom".into(), allow_uid: me, mock: None };
+    let mut o = Opts {
+        socket: "/run/loom/auth.sock".into(),
+        service: "loom".into(),
+        allow_uid: me,
+        mock: None,
+        session: "loom --tty --session --curtain /run/loom/handover".into(),
+        vt: None,
+    };
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
@@ -161,12 +356,17 @@ fn main() {
             "--service" => o.service = args.next().unwrap_or_default(),
             "--allow-uid" => o.allow_uid = args.next().and_then(|v| v.parse().ok()).unwrap_or(me),
             "--mock" => o.mock = args.next().and_then(|v| v.split_once(':').map(|(u, p)| (u.to_string(), p.to_string()))),
+            "--session" => o.session = args.next().unwrap_or_default(),
+            "--vt" => o.vt = args.next().and_then(|v| v.parse().ok()),
             _ => {
-                eprintln!("usage: loom-auth [--socket PATH] [--service NAME] [--allow-uid UID] [--mock USER:PASS]");
+                eprintln!("usage: loom-auth [--socket PATH] [--service NAME] [--allow-uid UID] [--mock USER:PASS] [--session CMD] [--vt N]");
                 std::process::exit(2);
             }
         }
     }
+    // finished session workers reaped, not left as zombies
+    // Safety: plain signal disposition
+    unsafe { libc::signal(libc::SIGCHLD, libc::SIG_IGN) };
     let _ = std::fs::remove_file(&o.socket);
     let l = match UnixListener::bind(&o.socket) {
         Ok(l) => l,
@@ -176,19 +376,12 @@ fn main() {
         }
     };
     eprintln!("loom-auth: on {} (service {}, uid {} may ask{})", o.socket, o.service, o.allow_uid, if o.mock.is_some() { ", mock" } else { "" });
-    // one request at a time: PAM's own delay after a failure slows guessing
+    // one sign-in at a time: PAM's own delay after a failure slows guessing
     for s in l.incoming().flatten() {
         if peer_uid(&s) != Some(o.allow_uid) {
             eprintln!("loom-auth: a connection from uid {:?} refused", peer_uid(&s));
             continue;
         }
-        let mut line = String::new();
-        // one line, at most 4 KiB (a password is not longer)
-        if BufReader::new((&s).take(4096)).read_line(&mut line).is_err() {
-            continue;
-        }
-        let a = answer(&o, &line);
-        line.clear();
-        let _ = writeln!(&s, "{a}");
+        serve(&o, &s);
     }
 }

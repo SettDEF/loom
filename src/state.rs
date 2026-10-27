@@ -207,6 +207,8 @@ pub struct Loom {
     pub restart_pending: bool,
     /// hyprctl dispatch loomdebug cursor: cursor changes logged
     pub debug_cursor: bool,
+    /// the login screen's last picture over a session just started (--curtain DIR; curtain.rs)
+    pub curtain: Option<crate::curtain::Curtain>,
     /// drag and drop into X programs (XDND), connected at the first such drag
     pub xdnd: Option<crate::xdnd::Xdnd>,
     /// KDE's output devices and their clients (System Settings › Display, kscreen-doctor)
@@ -349,6 +351,7 @@ impl Loom {
             restart: false,
             restart_pending: false,
             debug_cursor: false,
+            curtain: std::env::var_os("LOOM_CURTAIN").map(|d| crate::curtain::Curtain::new(d.into())),
             xdnd: None,
             own_x: Default::default(),
             x: Default::default(),
@@ -389,7 +392,7 @@ impl Loom {
     /// Any animation still running (the next frame must be drawn).
     pub fn animating(&self) -> bool {
         let now = std::time::Instant::now();
-        self.anims.values().any(|a| !a.done(now)) || !self.ghosts.is_empty() || self.fx.as_ref().is_some_and(|f| f.animating(now)) || self.layers_animating()
+        self.curtain_animating(now) || self.anims.values().any(|a| !a.done(now)) || !self.ghosts.is_empty() || self.fx.as_ref().is_some_and(|f| f.animating(now)) || self.layers_animating()
     }
 
     /// This window has the keyboard and shows as active (xdg activated); the others not.
@@ -553,6 +556,7 @@ impl CompositorHandler for Loom {
                 drop(map);
                 if !removing {
                     self.layer_committed(surface, false);
+                    self.curtain_layer(&layer.namespace().to_string());
                 }
                 if moved {
                     self.relayout();

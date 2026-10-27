@@ -53,7 +53,23 @@ user doing it themselves.
   "Authentication failure"); real PAM as the user with `--service login`: a wrong password refused
   after PAM's delay, an unknown user refused (one faillock entry per wrong try: do not loop it).
   dist/pam.d/loom: the system-login stack.
-- (c) the session start and the handover between two looms: next.
+- (c) built, headless (2026-10-28):
+  - The greeter is the user's own ii lock screen: the snapshot mirrors ii, its config, its generated
+    colours and the fonts into the greeter's home (rsync, only changes), and puts two files into the
+    copy (dist/greeter/ii): greeter.qml (ii's Background + Lock, locked from the start) and a
+    LockContext.qml with ii's API that asks the backend instead of PAM. Needs xray (below).
+  - misc:session_lock_xray now works in loom (it drew only the lock surface: ii's see-through lock
+    was black, on the desktop lock too); the snapshot carries it.
+  - After a right password the page saves each screen's last picture (grim, into LOOM_HANDOVER_DIR,
+    default /run/loom/handover) and says `start`; loom-auth starts the session (as root: setcred,
+    pam_open_session with XDG_SESSION_TYPE/CLASS/SEAT/VTNR, a worker that waits and closes it, the
+    session as the user by their login shell: `loom --tty --session --curtain /run/loom/handover`).
+  - `--curtain DIR`: the new loom draws those pictures over everything until the shell's wallpaper
+    layer (quickshell:background) sent its second buffer, then fades (450 ms); at most 6 s. Layers
+    under it skip their own opening. Headless, frame by frame: no dark frame, also under load 25.
+  - Open: grim for the pictures (loom could save them itself); ii's startup side effects run in the
+    greeter too (`vitals power profile`, keyboard backlight off): harmless as the greeter user, but
+    to check; the greeter user needs a writable state/cache dir.
 
 ## For the real seat later (the user, when they can test)
 
@@ -62,3 +78,5 @@ user doing it themselves.
 2. The PAM service: `sudo install -m 644 dist/pam.d/loom /etc/pam.d/loom`; then, as root,
    `loom-auth --socket /tmp/la.sock --allow-uid $(id -u caesar)` and the right password through the
    greeter (`--nested --greeter`) must say Welcome.
+3. The handover on the screen (the one thing headless cannot show): does the panel keep the last
+   picture while the greeter's loom lets go and the user's takes the GPU (no black frame)?

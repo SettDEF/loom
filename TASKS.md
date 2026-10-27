@@ -133,7 +133,7 @@ The milestones of [PLAN.md](PLAN.md), each step a line; ticked when it works wit
 - [ ] a week on it, Hyprland one login away
 - [x] greeter (a): the user's look snapshotted for the login screen, `loom --greeter DIR` shows it (dist/greeter: wallpaper, clock, name, password), headless (docs/greeter.md)
 - [x] greeter (b): loom-auth, the PAM helper (src/bin/loom-auth.rs; mock for tests, real PAM refuses a wrong password); the greeter page asks it directly, shakes on failure; dist/pam.d/loom
-- [ ] greeter (c): the handover from the greeter's loom to the user's without a black frame
+- [~] greeter (c): the user's own ii lock screen as the greeter (snapshot mirrors ii; dist/greeter/ii), session_lock_xray, loom-auth starts the session (PAM session as root), --curtain fades the greeter's last picture into the shell (headless: no dark frame); the GPU handover itself needs the real seat
 - [ ] greeter (d): on the real seat (the user: docs/greeter.md "For the real seat later")
 
 ## X per screen, like Hyprland (2026-10-27)

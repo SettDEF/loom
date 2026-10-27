@@ -68,6 +68,8 @@ impl Loom {
         let [model, layout, variant, options] = crate::config::xkb_names();
         let (delay, rate) = crate::config::key_repeat();
         conf += &format!("input {{\n    kb_model = {model}\n    kb_layout = {layout}\n    kb_variant = {variant}\n    kb_options = {options}\n    repeat_delay = {delay}\n    repeat_rate = {rate}\n}}\n");
+        // ii's lock is see-through: with xray its wallpaper shows under it (else black)
+        conf += &format!("misc {{\n    session_lock_xray = {}\n}}\n", self.look.lock_xray);
         write_atomic(&dir.join(".config/hypr/hyprland.conf"), conf.as_bytes())?;
 
         // ii's look: its generated colours, its font, its wallpaper (copied: the home is closed)
@@ -87,6 +89,10 @@ impl Loom {
             }
             wall_name = Some(name);
         }
+        // the user's ii itself (their real lock screen, side panel and all) at the same paths under
+        // the greeter's home, with loom's greeter entry and its LockContext put over ii's in the copy
+        let (from, to) = (home.clone(), dir.to_path_buf());
+        std::thread::spawn(move || mirror_ii(&from, &to));
         let user = std::env::var("USER").unwrap_or_default();
         let (cursor, cursor_size) = xcursor();
         let j = serde_json::json!({
@@ -98,6 +104,46 @@ impl Loom {
         });
         write_atomic(&dir.join("greeter.json"), serde_json::to_string_pretty(&j).unwrap_or_default().as_bytes())
     }
+}
+
+/// The greeter's entry (only ii's lock, locked from the start) and its LockContext (the password to
+/// the login backend, the screen kept locked for the handover); dist/greeter/ii.
+const II_GREETER: &str = include_str!("../dist/greeter/ii/greeter.qml");
+const II_LOCK_CONTEXT: &str = include_str!("../dist/greeter/ii/LockContext.qml");
+
+/// ii, its config, its generated colours and the user's fonts mirrored into the greeter's home
+/// (rsync: only changes; ii's .git left out), then the greeter's two files put into the copy.
+fn mirror_ii(home: &Path, dir: &Path) {
+    let ii = home.join(".config/quickshell/ii");
+    if !ii.join("shell.qml").is_file() {
+        return;
+    }
+    for rel in [".config/quickshell/ii", ".config/illogical-impulse", ".local/state/quickshell/user/generated", ".local/share/fonts"] {
+        let (src, dst) = (home.join(rel), dir.join(rel));
+        if !src.exists() {
+            continue;
+        }
+        let _ = std::fs::create_dir_all(&dst);
+        let ok = std::process::Command::new("rsync")
+            .args(["-a", "--delete", "--exclude", ".git", "--exclude", "greeter.qml"])
+            .arg(format!("{}/", src.display()))
+            .arg(format!("{}/", dst.display()))
+            .status()
+            .is_ok_and(|s| s.success());
+        if !ok {
+            eprintln!("loom: greeter snapshot: {rel} not copied (rsync)");
+            return;
+        }
+    }
+    let copy = dir.join(".config/quickshell/ii");
+    let put = |rel: &str, text: &str| {
+        let p = copy.join(rel);
+        if std::fs::read_to_string(&p).ok().as_deref() != Some(text) {
+            let _ = write_atomic(&p, text.as_bytes());
+        }
+    };
+    put("modules/common/panels/lock/LockContext.qml", II_LOCK_CONTEXT);
+    put("greeter.qml", II_GREETER);
 }
 
 /// `loom --greeter DIR`: this process (and what it starts) sees DIR as its home, the user's cursor,
@@ -118,7 +164,13 @@ pub fn enter(dir: &Path, run: &mut Vec<String>) {
         }
     }
     if run.is_empty() {
-        let qml = std::env::var("LOOM_GREETER_QML").unwrap_or_else(|_| "/usr/share/loom/greeter".into());
+        // the user's own lock screen (the snapshot's ii), else loom's plain greeter
+        let ii = dir.join(".config/quickshell/ii/greeter.qml");
+        let qml = if ii.is_file() && std::env::var_os("LOOM_GREETER_QML").is_none() {
+            ii.to_string_lossy().into_owned()
+        } else {
+            std::env::var("LOOM_GREETER_QML").unwrap_or_else(|_| "/usr/share/loom/greeter".into())
+        };
         *run = vec!["qs".into(), "-p".into(), qml];
     }
     eprintln!("loom: greeter from {} ({} {})", dir.display(), j["user"].as_str().unwrap_or("?"), j["cursor"].as_str().unwrap_or("default cursor"));

@@ -343,6 +343,11 @@ impl crate::state::Loom {
         let has = smithay::backend::renderer::utils::with_renderer_surface_state(surface, |s| s.buffer().is_some()).unwrap_or(false);
         self.layer_keyboard_changed(surface, has);
         if has && self.layer_shown.insert(id.clone()) {
+            // under the login screen's curtain no opening of its own: the curtain's fade is the one
+            // (a layer fading in under a fading curtain let the empty screen through, 2 dark frames)
+            if self.curtain_animating(Instant::now()) {
+                return;
+            }
             if let Some(style) = self.layer_cfg.style_for(&ns, true) {
                 self.layer_anims.insert(id, LayerAnim::new(&self.layer_cfg, style, true, Instant::now()));
             }

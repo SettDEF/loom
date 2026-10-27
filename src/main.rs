@@ -50,6 +50,7 @@ mod wm;
 mod xwayland;
 mod xscreens;
 mod greeter;
+mod curtain;
 
 use std::{path::PathBuf, time::Duration};
 
@@ -72,6 +73,9 @@ fn main() {
             "--headless" => headless = true,
             // the login screen (greeter.rs): DIR is the user's snapshot, the greeter QML runs
             "--greeter" => greeter_dir = args.next().map(PathBuf::from),
+            // a session started from the login screen: its last pictures over the start (curtain.rs)
+            // Safety: single-threaded still (argument parsing)
+            "--curtain" => unsafe { std::env::set_var("LOOM_CURTAIN", args.next().unwrap_or_default()) },
             "--nested" => nested = true,
             "--tty" => tty = true,
             "--session" => session = true,

@@ -118,12 +118,22 @@ where
     // where this screen is in compositor space, and how big (logical): windows are drawn relative to it
     let og = state.space.output_geometry(output).unwrap_or_default();
     let (ox, oy) = (og.loc.x as f64, og.loc.y as f64);
+    // the login screen's last picture, over everything until the shell is up (curtain.rs)
+    if let Some((c, a)) = state.curtain.as_ref().and_then(|c| Some((c, c.alpha(now)?))) {
+        if let Some((buf, px)) = c.picture(&output.name()) {
+            out.extend(renderer.picture(&buf, (0.0, 0.0).into(), og.size, px, a));
+        }
+    }
     if state.locked() {
         if let Some(s) = state.lock_surface_on(&output.name()) {
             out.extend(smithay::backend::renderer::element::surface::render_elements_from_surface_tree(renderer, s, Point::<i32, Physical>::from((0, 0)), Scale::from(os), 1.0, smithay::backend::renderer::element::Kind::Unspecified).into_iter().map(R::plain));
         }
-        return out;
+        // misc:session_lock_xray: the desktop under the lock screen, as Hyprland draws it
+        if !state.look.lock_xray {
+            return out;
+        }
     }
+
     let map = layer_map_for_output(output);
     // what gets drawn over a blur of what is behind it (ranges of `out`)
     let mut targets: Vec<(std::ops::Range<usize>, crate::blur::Mask)> = Vec::new();
