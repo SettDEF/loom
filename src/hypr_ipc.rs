@@ -334,7 +334,7 @@ impl Loom {
                     if self.managed_of(&w).is_some_and(|m| m.floating) {
                         self.space.map_element(w.clone(), (*x, *y), true);
                         if let Some(xs) = w.x11_surface() {
-                            let _ = xs.configure(smithay::utils::Rectangle::new((*x, *y).into(), xs.geometry().size));
+                            let _ = xs.configure(self.x_moved(xs, (*x, *y).into()));
                         }
                         self.dirty = true;
                     }

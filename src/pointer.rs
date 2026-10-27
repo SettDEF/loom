@@ -225,7 +225,7 @@ impl Loom {
             let to: Point<i32, Logical> = (d.start.loc.x + dx, d.start.loc.y + dy).into();
             self.space.map_element(w.clone(), to, true);
             if let Some(x) = w.x11_surface() {
-                let _ = x.configure(Rectangle::new(to, x.geometry().size));
+                let _ = x.configure(self.x_moved(x, to));
             }
             // it follows the hand: no glide
             if let Some(a) = self.managed_of(&w).map(|m| m.addr).and_then(|addr| self.anims.get_mut(&addr)) {

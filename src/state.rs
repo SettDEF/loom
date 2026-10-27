@@ -442,12 +442,9 @@ impl Loom {
         }
         let target = match (window.toplevel(), window.x11_surface()) {
             (Some(t), _) => Some(crate::focus::KbFocus::Surface(t.wl_surface().clone())),
-            (_, Some(x)) => {
-                if let Some(wm) = self.xwm.as_mut() {
-                    let _ = wm.raise_window(x);
-                }
-                Some(crate::focus::KbFocus::X11(x.clone()))
-            }
+            // not raised in X here: x_sync_stacking above told X loom's order, and raising the focused
+            // one put a fullscreen Bitwig over its floating plugin (black in X, its clicks to Bitwig)
+            (_, Some(x)) => Some(crate::focus::KbFocus::X11(x.clone())),
             _ => None,
         };
         let kb = self.seat.get_keyboard().expect("keyboard");

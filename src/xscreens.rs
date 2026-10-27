@@ -114,6 +114,14 @@ impl Loom {
         self.x.layout.as_ref().map(|l| l.scale_at(r)).unwrap_or(1.0)
     }
 
+    /// Where an X window moved to `to` goes, keeping its X pixels (as Hyprland): a fixed-size one (a
+    /// Wine plugin at 500x700) taken to a screen of another scale was cut to its old logical size.
+    pub fn x_moved(&self, x: &smithay::xwayland::X11Surface, to: smithay::utils::Point<i32, Logical>) -> Rectangle<i32, Logical> {
+        let old = x.geometry();
+        let ratio = self.x_scale_at(old) / self.x_scale_at(Rectangle::new(to, old.size));
+        Rectangle::new(to, old.size.to_f64().upscale(ratio).to_i32_round())
+    }
+
     /// The scale of the X window with this surface (1 when it is none).
     pub fn x_surface_scale(&self, s: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface) -> f64 {
         smithay::wayland::compositor::surface_scale(s, 1.0)

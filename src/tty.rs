@@ -184,8 +184,11 @@ fn edid_name(edid: &[u8]) -> Option<String> {
 /// The theme's default arrow (XCURSOR_THEME, else "default") at `size` pixels, ARGB, and its hotspot.
 fn load_cursor(name: &str, size: u32) -> Option<(MemoryRenderBuffer, (i32, i32))> {
     let theme = std::env::var("XCURSOR_THEME").unwrap_or_else(|_| "default".into());
-    // the name in the theme, else in Adwaita, else the arrow
-    let path = [name, "default"].iter().find_map(|n| xcursor::CursorTheme::load(&theme).load_icon(n).or_else(|| xcursor::CursorTheme::load("Adwaita").load_icon(n)))?;
+    // the name or one of its old X names in the theme (Oxygen has closedhand, not grabbing), else in Adwaita, else the arrow
+    let icon = name.parse::<smithay::input::pointer::CursorIcon>().ok();
+    let names: Vec<&str> = std::iter::once(name).chain(icon.iter().flat_map(|i| i.alt_names().iter().copied())).collect();
+    let t = xcursor::CursorTheme::load(&theme);
+    let path = names.iter().find_map(|n| t.load_icon(n)).or_else(|| names.iter().find_map(|n| xcursor::CursorTheme::load("Adwaita").load_icon(n))).or_else(|| t.load_icon("default"))?;
     let images = xcursor::parser::parse_xcursor(&std::fs::read(path).ok()?)?;
     let img = images.iter().min_by_key(|i| (i.size as i64 - size as i64).abs())?;
     let buf = MemoryRenderBuffer::from_slice(&img.pixels_rgba.chunks(4).flat_map(|p| [p[2], p[1], p[0], p[3]]).collect::<Vec<u8>>(), Fourcc::Argb8888, (img.width as i32, img.height as i32), 1, Transform::Normal, None);
@@ -425,7 +428,15 @@ impl Loom {
             let os = output.current_scale().fractional_scale();
             if og.to_f64().contains(self.pointer_at) {
                 let at = (self.pointer_at - og.loc.to_f64()).to_physical(os);
-                match &self.cursor_status {
+                // a Super+drag shows what it does, as Hyprland: a grab while moving, a resize arrow while
+                // resizing (the window's own cursor stayed during it)
+                let status = match &self.drag {
+                    Some(d) if !d.resize => CursorImageStatus::Named(smithay::input::pointer::CursorIcon::Grabbing),
+                    Some(d) if d.was_tiled => CursorImageStatus::Named(smithay::input::pointer::CursorIcon::ColResize),
+                    Some(_) => CursorImageStatus::Named(smithay::input::pointer::CursorIcon::SeResize),
+                    None => self.cursor_status.clone(),
+                };
+                match &status {
                     CursorImageStatus::Hidden => {}
                     CursorImageStatus::Surface(s) => {
                         let hot = smithay::wayland::compositor::with_states(s, |st| st.data_map.get::<smithay::input::pointer::CursorImageSurfaceData>().map(|d| d.lock().unwrap().hotspot)).unwrap_or_default();
