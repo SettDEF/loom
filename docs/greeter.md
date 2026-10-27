@@ -45,9 +45,20 @@ user doing it themselves.
   and starts dist/greeter/shell.qml (LOOM_GREETER_QML). Test: `LOOM_GREETER_DIR=/tmp/g loom --headless
   --wait 800`, then `LOOM_GREETER_QML=$PWD/dist/greeter loom --headless --greeter /tmp/g --keys secret
   --snapshot out.png`.
-- (b) loom-auth with a mock PAM backend, (c) the handover between two looms: next.
+- (b) done, headless (2026-10-28): `loom-auth` (src/bin/loom-auth.rs), the only PAM code: one JSON
+  line in ({user, password}), one out ({ok} or {ok: false, message}); only the greeter's uid may ask
+  (SO_PEERCRED); the password's bytes cleared after. The greeter page talks to it directly over
+  LOOM_AUTH_SOCKET (default /run/loom/auth.sock), so the password never passes through loom; a failure
+  shows PAM's message and shakes the field. Tests: `--mock USER:PASS` (right: Welcome, wrong:
+  "Authentication failure"); real PAM as the user with `--service login`: a wrong password refused
+  after PAM's delay, an unknown user refused (one faillock entry per wrong try: do not loop it).
+  dist/pam.d/loom: the system-login stack.
+- (c) the session start and the handover between two looms: next.
 
 ## For the real seat later (the user, when they can test)
 
 1. The snapshot folder: `sudo install -d -o caesar -m 755 /var/lib/loom/greeter` (later a dist/
    tmpfiles entry); then `loom restart` writes it; check `/var/lib/loom/greeter/greeter.json`.
+2. The PAM service: `sudo install -m 644 dist/pam.d/loom /etc/pam.d/loom`; then, as root,
+   `loom-auth --socket /tmp/la.sock --allow-uid $(id -u caesar)` and the right password through the
+   greeter (`--nested --greeter`) must say Welcome.

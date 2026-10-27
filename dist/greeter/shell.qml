@@ -22,13 +22,46 @@ ShellRoot {
         onLoaded: root.g = JSON.parse(text())
     }
 
-    // `submit`: for now only said on stdout (the auth helper comes with step b)
+    // `submit`: the password to loom-auth over its socket (LOOM_AUTH_SOCKET), straight from this
+    // page: it never passes through the compositor
+    readonly property string authSocket: Quickshell.env("LOOM_AUTH_SOCKET") || "/run/loom/auth.sock"
+    signal failed()
     function submit() {
         if (password.length === 0 || busy)
             return
         busy = true
-        console.log("greeter: submit for " + (g.user || "?"))
         message = "Signing in…"
+        auth.connected = true
+    }
+    Socket {
+        id: auth
+        path: root.authSocket
+        onConnectionStateChanged: {
+            if (connected) {
+                write(JSON.stringify({ user: root.g.user || "", password: root.password }) + "\n")
+                flush()
+            }
+        }
+        onError: {
+            root.busy = false
+            root.message = "The sign-in service is not running"
+        }
+        parser: SplitParser {
+            onRead: line => {
+                auth.connected = false
+                let r = {}
+                try { r = JSON.parse(line) } catch (e) {}
+                root.password = ""
+                if (r.ok) {
+                    root.message = "Welcome"
+                    console.log("greeter: signed in as " + (root.g.user || "?"))
+                } else {
+                    root.busy = false
+                    root.message = r.message || "Sign-in failed"
+                    root.failed()
+                }
+            }
+        }
     }
 
     SystemClock { id: clock; precision: SystemClock.Seconds }
@@ -109,8 +142,21 @@ ShellRoot {
                     font.pixelSize: 20
                 }
                 Rectangle {
+                    id: pill
                     anchors.horizontalCenter: parent.horizontalCenter
                     width: 300; height: 48; radius: 24
+                    transform: Translate { id: shake }
+                    SequentialAnimation {
+                        id: shakeAnim
+                        NumberAnimation { target: shake; property: "x"; to: -12; duration: 50 }
+                        NumberAnimation { target: shake; property: "x"; to: 12; duration: 80 }
+                        NumberAnimation { target: shake; property: "x"; to: -6; duration: 70 }
+                        NumberAnimation { target: shake; property: "x"; to: 0; duration: 60 }
+                    }
+                    Connections {
+                        target: root
+                        function onFailed() { shakeAnim.start(); field.forceActiveFocus() }
+                    }
                     color: root.col("surface_container_high", "#2a2d33")
                     TextInput {
                         id: field
