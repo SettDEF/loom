@@ -92,7 +92,7 @@ use wayland_server::{
     Client, DisplayHandle, GlobalDispatch, Resource,
 };
 
-use crate::utils::{Logical, Point};
+use crate::utils::{Logical, Point, Rectangle};
 
 pub use self::handlers::XdgOutputUserData;
 
@@ -248,10 +248,29 @@ impl Output {
                 inner.send_geometry_to(&output);
             }
             if (new_scale.is_some() || scale_changed) && output.version() >= 2 {
-                let scale = (inner.scale.integer_scale() as f64 / client_scale).max(1.).ceil() as i32;
+                let x = inner.x_rect.is_some() && xdg::is_x(&output);
+                let scale = if x { 1 } else { (inner.scale.integer_scale() as f64 / client_scale).max(1.).ceil() as i32 };
                 output.scale(scale);
             }
             if output.version() >= 2 {
+                output.done();
+            }
+        }
+    }
+
+    /// loom: where Xwayland sees this screen, in X pixels (`None`: as everyone else, by the client scale).
+    /// Hyprland's force_zero_scaling: each screen at its real pixels, placed side by side.
+    pub fn set_x_geometry(&self, r: Option<Rectangle<i32, Logical>>) {
+        let mut inner = self.inner.0.lock().unwrap();
+        inner.x_rect = r;
+        if let Some(xdg) = inner.xdg_output.as_ref() {
+            xdg.set_x_rect(r);
+        }
+        for output in inner.instances.iter().filter_map(|o| o.upgrade().ok()).filter(xdg::is_x) {
+            if output.version() >= 2 {
+                if r.is_some() {
+                    output.scale(1);
+                }
                 output.done();
             }
         }

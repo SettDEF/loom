@@ -16,4 +16,4 @@ mod xserver;
 pub mod xwm;
 
 pub use self::xserver::{XWayland, XWaylandClientData, XWaylandEvent, XWaylandReserved};
-pub use self::xwm::{X11Surface, X11Wm, XwmHandler};
+pub use self::xwm::{X11Surface, X11Wm, XMap, XwmHandler};

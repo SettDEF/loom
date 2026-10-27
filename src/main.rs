@@ -48,6 +48,7 @@ mod tty;
 mod winrules;
 mod wm;
 mod xwayland;
+mod xscreens;
 
 use std::{path::PathBuf, time::Duration};
 
@@ -202,9 +203,17 @@ fn ask_restart() -> i32 {
     };
     match std::os::unix::net::UnixStream::connect(sock(&sig)) {
         Ok(mut s) => {
-            let _ = s.write_all(b"dispatch loomrestart");
+            let force = std::env::args().any(|a| a == "--force");
+            let _ = s.write_all(if force { b"dispatch loomrestart force" as &[u8] } else { b"dispatch loomrestart" });
             let mut r = String::new();
             let _ = s.read_to_string(&mut r);
+            if !r.trim().is_empty() && r.trim() != "ok" {
+                println!("loom restart: {}", r.trim());
+            }
+            if r.starts_with("not restarted") {
+                eprintln!("loom restart: {}", r.trim());
+                return 1;
+            }
             0
         }
         Err(e) => {

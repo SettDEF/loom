@@ -81,7 +81,9 @@ where
         }
 
         if output.version() >= 2 {
-            output.scale(inner.scale.integer_scale());
+            // loom: Xwayland with its own X layout sees every screen at scale 1
+            let x = inner.x_rect.is_some() && super::xdg::is_x(&output);
+            output.scale(if x { 1 } else { inner.scale.integer_scale() });
             output.done();
         }
 

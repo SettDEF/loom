@@ -93,7 +93,7 @@
 
 use crate::{
     output::Output,
-    utils::{x11rb::X11Source, Client, Logical, Point, Rectangle, Size},
+    utils::{x11rb::X11Source, Client, Logical, Physical, Point, Rectangle, Size},
     wayland::{
         selection::SelectionTarget,
         xwayland_shell::{self, XWaylandShellHandler},
@@ -396,12 +396,49 @@ pub trait XwmHandler {
     fn disconnected(&mut self, _xwm: XwmId) {}
 }
 
+/// loom: X coordinates per screen (Hyprland's force_zero_scaling: each screen at its real pixels).
+pub trait XMap: Send + Sync + std::fmt::Debug {
+    /// a logical rectangle (smithay's space) in X pixels
+    fn to_x(&self, r: Rectangle<i32, Logical>) -> Rectangle<i32, Physical>;
+    /// an X rectangle in smithay's space
+    fn from_x(&self, r: Rectangle<i32, Physical>) -> Rectangle<i32, Logical>;
+}
+
+/// loom: the client scale, or the map when one is set.
+#[derive(Debug, Clone)]
+pub(crate) struct XCoords {
+    scale: Arc<AtomicF64>,
+    map: Arc<std::sync::RwLock<Option<Arc<dyn XMap>>>>,
+}
+
+impl XCoords {
+    pub(crate) fn to_x(&self, r: Rectangle<i32, Logical>) -> Rectangle<i32, Client> {
+        match &*self.map.read().unwrap() {
+            Some(m) => {
+                let r = m.to_x(r);
+                Rectangle::new((r.loc.x, r.loc.y).into(), (r.size.w, r.size.h).into())
+            }
+            None => r.to_client_precise_round(self.scale.load(Ordering::Acquire)),
+        }
+    }
+    pub(crate) fn from_x(&self, r: Rectangle<i32, Client>) -> Rectangle<i32, Logical> {
+        match &*self.map.read().unwrap() {
+            Some(m) => m.from_x(Rectangle::new((r.loc.x, r.loc.y).into(), (r.size.w, r.size.h).into())),
+            None => r.to_f64().to_logical(self.scale.load(Ordering::Acquire)).to_i32_round(),
+        }
+    }
+    /// an X size (size hints) for a window at `at`
+    pub(crate) fn size_from_x(&self, s: Size<i32, Client>, at: Rectangle<i32, Logical>) -> Size<i32, Logical> {
+        self.from_x(Rectangle::new(self.to_x(at).loc, s)).size
+    }
+}
+
 /// The runtime state of an reparenting XWayland window manager.
 #[derive(Debug)]
 pub struct X11Wm {
     id: XwmId,
     conn: Arc<RustConnection>,
-    client_scale: Arc<AtomicF64>,
+    pub(crate) coords: XCoords,
     screen: Screen,
     wm_window: X11Window,
     atoms: Atoms,
@@ -717,6 +754,13 @@ impl From<ConnectionError> for PrimaryOutputError {
 }
 
 impl X11Wm {
+    /// loom: X coordinates through `map` (each screen at its own X place and scale); `None`: the client scale.
+    pub fn set_x_map(&self, map: Option<Arc<dyn XMap>>) {
+        *self.coords.map.write().unwrap() = map;
+    }
+}
+
+impl X11Wm {
     /// Start a new window manager for a given Xwayland connection
     ///
     /// ## Arguments
@@ -869,7 +913,7 @@ impl X11Wm {
         let source = X11Source::new(Arc::clone(&conn), win, atoms._SMITHAY_CLOSE_CONNECTION);
 
         let client_data = client.get_data::<XWaylandClientData>().unwrap();
-        let client_scale = client_data.compositor_state.clone_client_scale();
+        let coords = XCoords { scale: client_data.compositor_state.clone_client_scale(), map: Default::default() };
 
         // We need this for the commit hook.
         client_data.user_data().insert_if_missing(|| id);
@@ -890,7 +934,7 @@ impl X11Wm {
         let wm = Self {
             id,
             conn,
-            client_scale,
+            coords,
             screen,
             atoms,
             xsettings,
@@ -1454,7 +1498,8 @@ where
                 (geo.x as i32, geo.y as i32).into(),
                 (geo.width as i32, geo.height as i32).into(),
             )
-            .to_logical(xwm.client_scale.load(Ordering::Acquire) as i32);
+            ;
+            let geometry = xwm.coords.from_x(geometry);
 
             let surface = X11Surface::new(
                 Some(xwm),
@@ -1576,29 +1621,37 @@ where
             if let Some(surface) = xwm.windows.iter().find(|x| x.window_id() == r.window).cloned() {
                 drop(_guard);
 
-                let client_scale = xwm.client_scale.load(Ordering::Acquire);
+                // loom: the request in X pixels made whole from the window's current place, then mapped
+                let mask = u16::from(r.value_mask);
+                let has = |f: ConfigWindow| mask & u16::from(f) != 0;
+                let cur = xwm.coords.to_x(surface.geometry());
+                let want = Rectangle::<i32, Client>::new(
+                    (if has(ConfigWindow::X) { r.x as i32 } else { cur.loc.x }, if has(ConfigWindow::Y) { r.y as i32 } else { cur.loc.y }).into(),
+                    (if has(ConfigWindow::WIDTH) { r.width as i32 } else { cur.size.w }, if has(ConfigWindow::HEIGHT) { r.height as i32 } else { cur.size.h }).into(),
+                );
+                let want = xwm.coords.from_x(want);
 
                 // Pass the request to downstream to decide
                 state.configure_request(
                     xwm_id,
                     surface.clone(),
                     if u16::from(r.value_mask) & u16::from(ConfigWindow::X) != 0 {
-                        Some(((r.x as f64) / client_scale).round() as i32)
+                        Some(want.loc.x)
                     } else {
                         None
                     },
                     if u16::from(r.value_mask) & u16::from(ConfigWindow::Y) != 0 {
-                        Some(((r.y as f64) / client_scale).round() as i32)
+                        Some(want.loc.y)
                     } else {
                         None
                     },
                     if u16::from(r.value_mask) & u16::from(ConfigWindow::WIDTH) != 0 {
-                        Some(((r.width as f64) / client_scale).round() as u32)
+                        Some(want.size.w as u32)
                     } else {
                         None
                     },
                     if u16::from(r.value_mask) & u16::from(ConfigWindow::HEIGHT) != 0 {
-                        Some(((r.height as f64) / client_scale).round() as u32)
+                        Some(want.size.h as u32)
                     } else {
                         None
                     },
@@ -1634,14 +1687,10 @@ where
         Event::ConfigureNotify(n) => {
             trace!(window = ?n, "configured X11 Window");
 
-            let client_scale = xwm.client_scale.load(Ordering::Acquire);
-            let geometry = Rectangle::<i32, Client>::new(
+            let geometry = xwm.coords.from_x(Rectangle::<i32, Client>::new(
                 (n.x as i32, n.y as i32).into(),
                 (n.width as i32, n.height as i32).into(),
-            )
-            .to_f64()
-            .to_logical(client_scale)
-            .to_i32_round();
+            ));
 
             if let Some(surface) = xwm
                 .windows

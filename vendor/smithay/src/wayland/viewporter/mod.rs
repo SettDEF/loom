@@ -289,7 +289,7 @@ where
                     let size = if is_unset {
                         None
                     } else {
-                        let client_scale = state.client_compositor_state(client).client_scale();
+                        let client_scale = crate::wayland::compositor::surface_scale(&surface, state.client_compositor_state(client).client_scale());
                         let dst = Size::<_, Client>::from((width, height))
                             .to_f64()
                             .to_logical(client_scale)

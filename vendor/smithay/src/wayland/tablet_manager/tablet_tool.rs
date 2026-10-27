@@ -52,11 +52,7 @@ impl TabletTool {
             tablet.with_focused_tablet(&focus, |wl_tablet| {
                 wl_tool.proximity_in(serial.into(), wl_tablet, &focus);
                 // proximity_in has to be followed by motion event (required by protocol)
-                let client_scale = wl_tool
-                    .data::<TabletToolUserData>()
-                    .unwrap()
-                    .client_scale
-                    .load(Ordering::Acquire);
+                let client_scale = crate::wayland::compositor::surface_scale(&focus, wl_tool.data::<TabletToolUserData>().unwrap().client_scale.load(Ordering::Acquire));
                 let srel_loc = (loc - sloc).to_client(client_scale);
                 wl_tool.motion(srel_loc.x, srel_loc.y);
                 wl_tool.frame(time);
@@ -136,11 +132,7 @@ impl TabletTool {
                         .find(|i| i.id().same_client_as(&focus.0.id()))
                         .and_then(|tool| tool.upgrade().ok())
                     {
-                        let client_scale = wl_tool
-                            .data::<TabletToolUserData>()
-                            .unwrap()
-                            .client_scale
-                            .load(Ordering::Acquire);
+                        let client_scale = crate::wayland::compositor::surface_scale(&focus.0, wl_tool.data::<TabletToolUserData>().unwrap().client_scale.load(Ordering::Acquire));
                         let srel_loc = (pos - focus.1).to_client(client_scale);
                         wl_tool.motion(srel_loc.x, srel_loc.y);
 
@@ -509,11 +501,7 @@ where
                                         hotspot: (0, 0).into(),
                                     })
                                 });
-                                let client_scale = tool
-                                    .data::<TabletToolUserData>()
-                                    .unwrap()
-                                    .client_scale
-                                    .load(Ordering::Acquire);
+                                let client_scale = crate::wayland::compositor::surface_scale(&surface, tool.data::<TabletToolUserData>().unwrap().client_scale.load(Ordering::Acquire));
                                 let hotspot = Point::<_, ClientCoords>::from((hotspot_x, hotspot_y))
                                     .to_f64()
                                     .to_logical(client_scale)

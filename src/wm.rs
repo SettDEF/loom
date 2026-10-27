@@ -148,6 +148,8 @@ impl Loom {
                 a.moving_to(full.loc.x as f64, full.loc.y as f64, now);
             }
         }
+        self.x_sync_stacking();
+        self.x_scales();
         self.dirty = true;
     }
 
@@ -702,5 +704,24 @@ fn suspend(w: &Window, on: bool) {
     let changed = t.with_pending_state(|s| if on { s.states.set(State::Suspended) } else { s.states.unset(State::Suspended) });
     if changed && t.is_initial_configure_sent() {
         t.send_pending_configure();
+    }
+}
+
+impl Loom {
+    /// X's stacking order made the one loom draws: floating windows over tiled ones, then each X
+    /// window raised in X from the bottom up. X clips a window's content where it thinks another
+    /// covers it: with Bitwig's main window "above" its floating plugin window in X, the plugin's
+    /// GPU-drawn content came out black wherever the two overlapped.
+    pub fn x_sync_stacking(&mut self) {
+        let floats: Vec<Window> = self.space.elements().filter(|w| self.managed_of(w).is_some_and(|m| m.floating && m.ws != SPECIAL)).cloned().collect();
+        for w in &floats {
+            self.space.raise_element(w, false);
+        }
+        let xs: Vec<smithay::xwayland::X11Surface> = self.space.elements().filter_map(|w| w.x11_surface().cloned()).collect();
+        if let Some(wm) = self.xwm.as_mut() {
+            for x in &xs {
+                let _ = wm.raise_window(x);
+            }
+        }
     }
 }

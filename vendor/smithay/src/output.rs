@@ -230,6 +230,9 @@ pub(crate) struct Inner {
     pub(crate) handle: Option<WeakHandle>,
     #[cfg(feature = "wayland_frontend")]
     pub(crate) xdg_output: Option<XdgOutput>,
+    /// loom: where Xwayland sees this screen (Output::set_x_geometry)
+    #[cfg(feature = "wayland_frontend")]
+    pub(crate) x_rect: Option<crate::utils::Rectangle<i32, crate::utils::Logical>>,
     #[cfg(feature = "wayland_frontend")]
     pub(crate) surfaces: HashSet<WlWeak<WlSurface>>,
 }
@@ -275,6 +278,8 @@ impl Output {
                 preferred_mode: None,
                 #[cfg(feature = "wayland_frontend")]
                 xdg_output: None,
+                #[cfg(feature = "wayland_frontend")]
+                x_rect: None,
                 #[cfg(feature = "wayland_frontend")]
                 surfaces: HashSet::new(),
             }),

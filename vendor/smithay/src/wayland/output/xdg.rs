@@ -9,7 +9,7 @@ use tracing::trace;
 use wayland_protocols::xdg::xdg_output::zv1::server::zxdg_output_v1::ZxdgOutputV1;
 use wayland_server::{protocol::wl_output::WlOutput, Resource, Weak};
 
-use crate::utils::{Logical, Physical, Point, Size, Transform};
+use crate::utils::{Logical, Physical, Point, Rectangle, Size, Transform};
 
 use super::{Mode, OutputUserData, Scale, XdgOutputUserData};
 
@@ -22,8 +22,23 @@ pub(crate) struct Inner {
     pub(super) physical_size: Option<Size<i32, Physical>>,
     pub(super) scale: Scale,
     transform: Transform,
+    /// loom: where X sees this screen (its X position, its pixel size), as Hyprland's force_zero_scaling
+    pub(super) x_rect: Option<Rectangle<i32, Logical>>,
 
     pub instances: Vec<Weak<ZxdgOutputV1>>,
+}
+
+/// loom: an Xwayland instance, told the X layout when one is set.
+pub(super) fn is_x(o: &impl Resource) -> bool {
+    #[cfg(feature = "xwayland")]
+    {
+        o.client().is_some_and(|c| c.get_data::<crate::xwayland::XWaylandClientData>().is_some())
+    }
+    #[cfg(not(feature = "xwayland"))]
+    {
+        let _ = o;
+        false
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -46,6 +61,7 @@ impl XdgOutput {
                 physical_size,
                 scale: output.scale,
                 transform: output.transform,
+                x_rect: output.x_rect,
 
                 instances: Vec::new(),
             })),
@@ -60,17 +76,22 @@ impl XdgOutput {
             .client_scale
             .load(Ordering::Acquire);
 
-        let logical_position = inner.logical_position.to_client_precise_round(client_scale);
-        xdg_output.logical_position(logical_position.x, logical_position.y);
+        if let Some(r) = inner.x_rect.filter(|_| is_x(xdg_output)) {
+            xdg_output.logical_position(r.loc.x, r.loc.y);
+            xdg_output.logical_size(r.size.w, r.size.h);
+        } else {
+            let logical_position = inner.logical_position.to_client_precise_round(client_scale);
+            xdg_output.logical_position(logical_position.x, logical_position.y);
 
-        if let Some(size) = inner.physical_size {
-            let logical_size = size
-                .to_f64()
-                .to_logical(inner.scale.fractional_scale())
-                .to_client(client_scale)
-                .to_i32_round();
-            let transformed_size = inner.transform.transform_size(logical_size);
-            xdg_output.logical_size(transformed_size.w, transformed_size.h);
+            if let Some(size) = inner.physical_size {
+                let logical_size = size
+                    .to_f64()
+                    .to_logical(inner.scale.fractional_scale())
+                    .to_client(client_scale)
+                    .to_i32_round();
+                let transformed_size = inner.transform.transform_size(logical_size);
+                xdg_output.logical_size(transformed_size.w, transformed_size.h);
+            }
         }
 
         if xdg_output.version() >= 2 {
@@ -117,6 +138,15 @@ impl XdgOutput {
                 continue;
             };
 
+            if let Some(r) = output.x_rect.filter(|_| is_x(&instance)) {
+                instance.logical_position(r.loc.x, r.loc.y);
+                instance.logical_size(r.size.w, r.size.h);
+                if instance.version() < 3 {
+                    instance.done();
+                }
+                continue;
+            }
+
             let data = instance.data::<XdgOutputUserData>().unwrap();
             let client_scale = data.client_scale.load(Ordering::Acquire);
             let scale_changed = client_scale != data.last_client_scale.swap(client_scale, Ordering::AcqRel);
@@ -144,6 +174,28 @@ impl XdgOutput {
             }
 
             // No need for wl_output.done() here, it will be called by caller (super::Output::change_current_state)
+        }
+    }
+}
+
+impl XdgOutput {
+    /// loom: sets where X sees the screen and tells the Xwayland instances (wl_output.done is the caller's).
+    pub(super) fn set_x_rect(&self, r: Option<Rectangle<i32, Logical>>) {
+        let mut inner = self.inner.lock().unwrap();
+        if inner.x_rect == r {
+            return;
+        }
+        inner.x_rect = r;
+        for instance in inner.instances.iter().filter_map(|i| i.upgrade().ok()).filter(is_x) {
+            let r = r.unwrap_or_else(|| {
+                let size = inner.physical_size.unwrap_or_default().to_f64().to_logical(inner.scale.fractional_scale()).to_i32_round();
+                Rectangle::new(inner.logical_position, inner.transform.transform_size(size))
+            });
+            instance.logical_position(r.loc.x, r.loc.y);
+            instance.logical_size(r.size.w, r.size.h);
+            if instance.version() < 3 {
+                instance.done();
+            }
         }
     }
 }

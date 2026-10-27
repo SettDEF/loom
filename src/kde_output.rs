@@ -230,7 +230,7 @@ impl Loom {
                 Change::Enable(..) | Change::Transform(..) => {}
             }
         }
-        self.x_apply_scale();
+        self.x_layout_apply();
         self.relayout();
         self.dirty = true;
         Ok(())

@@ -176,6 +176,7 @@ pub fn after_loop(state: crate::state::Loom, event_loop: smithay::reexports::cal
     let listeners: Vec<String> = state.hypr.as_ref().map(|h| h.listeners.iter().map(|s| unsafe { libc::dup(s.as_raw_fd()) }).filter(|&fd| fd >= 0).map(|fd| fd.to_string()).collect()).unwrap_or_default();
     // Safety: one thread (the loop is done)
     unsafe { std::env::set_var("LOOM_HYPR_LISTENERS", listeners.join(",")) };
+    save_workspaces(&state);
     let x = state.x_display;
     drop(state);
     drop(event_loop);
@@ -183,4 +184,50 @@ pub fn after_loop(state: crate::state::Loom, event_loop: smithay::reexports::cal
         return Err("restart: the Wayland socket could not be kept".into());
     }
     Err(Box::new(exec(kept, name, &signature, x)))
+}
+
+fn state_file() -> std::path::PathBuf {
+    std::path::PathBuf::from(std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".into())).join("loom-restart.json")
+}
+
+/// Before the exec: which workspace each screen shows and which screen has the focus, and each
+/// window's process and workspace (a program that reconnects keeps its process).
+fn save_workspaces(state: &crate::state::Loom) {
+    let windows: Vec<serde_json::Value> = state.managed.iter().filter(|m| m.pid > 0).map(|m| serde_json::json!([m.pid, m.ws])).collect();
+    let v = serde_json::json!({
+        "shown": state.shown_on,
+        "focused": state.output.as_ref().map(|o| o.name()),
+        "windows": windows,
+    });
+    let _ = std::fs::write(state_file(), v.to_string());
+}
+
+/// After a restart, once the screens are there: the workspaces they showed, the focus where it was,
+/// and each reconnecting window back on its workspace (through the exec rules: first window of a
+/// process). The shell hears the workspace events and redraws its bar.
+pub fn restore_workspaces(state: &mut crate::state::Loom) {
+    if !restarted() {
+        return;
+    }
+    let Ok(text) = std::fs::read_to_string(state_file()) else { return };
+    let _ = std::fs::remove_file(state_file());
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else { return };
+    for w in v["windows"].as_array().into_iter().flatten() {
+        if let (Some(pid), Some(ws)) = (w[0].as_u64(), w[1].as_i64()) {
+            // silent: the window goes there without switching the screen to it
+            state.exec_rules.push((pid as u32, ws as i32, true));
+        }
+    }
+    let outputs = state.outputs.clone();
+    if let Some(shown) = v["shown"].as_object() {
+        for o in &outputs {
+            if let Some(ws) = shown.get(&o.name()).and_then(|n| n.as_i64()) {
+                state.focus_output(o);
+                state.switch_workspace(ws as i32);
+            }
+        }
+    }
+    if let Some(f) = v["focused"].as_str().and_then(|n| outputs.iter().find(|o| o.name() == n)).cloned() {
+        state.focus_output(&f);
+    }
 }

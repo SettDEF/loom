@@ -203,6 +203,10 @@ pub struct Loom {
     pub x_display: Option<u32>,
     /// `loom restart` asked: the loop stops and the new binary takes over (restart.rs)
     pub restart: bool,
+    /// a restart waiting for the X programs it asked to close
+    pub restart_pending: bool,
+    /// hyprctl dispatch loomdebug cursor: cursor changes logged
+    pub debug_cursor: bool,
     /// drag and drop into X programs (XDND), connected at the first such drag
     pub xdnd: Option<crate::xdnd::Xdnd>,
     /// KDE's output devices and their clients (System Settings › Display, kscreen-doctor)
@@ -343,6 +347,8 @@ impl Loom {
             xwm: None,
             x_display: crate::restart::x_display(),
             restart: false,
+            restart_pending: false,
+            debug_cursor: false,
             xdnd: None,
             own_x: Default::default(),
             x: Default::default(),
@@ -413,6 +419,8 @@ impl Loom {
             self.foreign_all_changed();
         }
         self.space.raise_element(window, true);
+        // floating ones stay over the tiled one just raised, and X is told the same order
+        self.x_sync_stacking();
         for w in self.space.elements() {
             let on = w == window;
             if let Some(x) = w.x11_surface() {
@@ -528,6 +536,11 @@ impl CompositorHandler for Loom {
         if removing {
             self.layer_committed(surface, true);
         }
+        // an X surface's scale set as it was associated (this commit): its buffer read at it already
+        let own = smithay::wayland::compositor::surface_scale(surface, 0.0);
+        if own > 0.0 {
+            with_states(surface, |s| s.cached_state.get::<smithay::wayland::compositor::SurfaceAttributes>().current().client_scale = own);
+        }
         on_commit_buffer_handler::<Self>(surface);
         self.dirty = true;
         self.popups.commit(surface);
@@ -566,6 +579,10 @@ impl CompositorHandler for Loom {
         let found = self.space.elements().find(|w| smithay::wayland::seat::WaylandFocus::wl_surface(*w).is_some_and(|s| *s == root)).cloned();
         if let Some(window) = found {
             window.on_commit();
+            // an X window (a menu just mapped too): drawn at its screen's scale from its next frame
+            if window.x11_surface().is_some() {
+                self.x_scales();
+            }
             if let Some(a) = self.managed_of(&window).map(|m| m.addr) {
                 let n = self.commit_count.entry(a).or_default();
                 *n += 1;
@@ -765,6 +782,25 @@ impl SeatHandler for Loom {
         &mut self.seat_state
     }
     fn cursor_image(&mut self, _seat: &Seat<Self>, image: smithay::input::pointer::CursorImageStatus) {
+        // hyprctl dispatch loomdebug cursor: every change, who asked, how big (Bitwig's cursors changed only on clicks)
+        if self.debug_cursor {
+            let what = match &image {
+                smithay::input::pointer::CursorImageStatus::Hidden => "hidden".to_string(),
+                smithay::input::pointer::CursorImageStatus::Named(n) => format!("named {}", n.name()),
+                smithay::input::pointer::CursorImageStatus::Surface(s) => {
+                    let from_x = smithay::reexports::wayland_server::Resource::client(s).is_some_and(|c| self.x.client.as_ref().is_some_and(|x| x.id() == c.id()));
+                    let size = smithay::backend::renderer::utils::with_renderer_surface_state(s, |st| st.surface_size()).flatten();
+                    format!("surface from_x={from_x} size={size:?}")
+                }
+            };
+            // what is under it: Bitwig's cursor reset to default with the pointer still (focus changes?)
+            let under = self.surface_at(self.pointer_at).map(|(sf, _)| {
+                let who = smithay::reexports::wayland_server::Resource::client(&sf).and_then(|c| c.get_credentials(&self.dh).ok()).map(|c| std::fs::read_to_string(format!("/proc/{}/comm", c.pid)).unwrap_or_default().trim().to_string()).unwrap_or_default();
+                let layer = self.layer_output_of(&sf).map(|(_, l)| format!(" layer {}", l.namespace())).unwrap_or_default();
+                format!("{who}{layer}")
+            }).unwrap_or_else(|| "nothing".into());
+            eprintln!("loom: cursor {} at {:.0},{:.0} over {}", what, self.pointer_at.x, self.pointer_at.y, under);
+        }
         self.cursor_status = image;
         self.dirty = true;
     }

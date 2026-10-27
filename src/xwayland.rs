@@ -35,6 +35,10 @@ pub struct XState {
     /// Xwayland as a Wayland client (disconnecting it ends it); the pending idle check
     pub client: Option<smithay::reexports::wayland_server::Client>,
     pub idle_check: Option<RegistrationToken>,
+    /// xwayland:force_zero_scaling, read at the last layout
+    pub zero_scaling: bool,
+    /// where X sees the screens (xscreens.rs); None without force_zero_scaling
+    pub layout: Option<std::sync::Arc<crate::xscreens::XLayout>>,
 }
 
 /// Reserves a free X display (`display` to keep the same one) and watches it; returns its number.
@@ -84,12 +88,13 @@ impl Loom {
             }
         };
         self.x.client = Some(client.clone());
-        self.x_apply_scale();
+        self.x_layout_apply();
         let h2 = h.clone();
         let token = h.insert_source(xwayland, move |event, _, state: &mut Loom| match event {
             XWaylandEvent::Ready { x11_socket, display_number } => match X11Wm::start_wm(h2.clone(), x11_socket, client.clone()) {
                 Ok(wm) => {
                     state.xwm = Some(wm);
+                    state.x_layout_apply();
                     state.x.starting = false;
                     eprintln!("loom: Xwayland started for the first X program, DISPLAY=:{display_number}");
                     // the user's X settings (Xft.dpi: X text sized for the screen), as a login does; waited for (a few ms), so programs after this one see them
@@ -164,6 +169,11 @@ impl Loom {
             if self.focused.as_ref() == Some(&w) {
                 self.focus_next(self.active_ws);
             }
+        }
+        // a restart waiting for the X programs: the last one gone, it goes ahead
+        if self.restart_pending && !self.managed.iter().any(|m| m.window.x11_surface().is_some()) {
+            self.restart = true;
+            self.signal.stop();
         }
         self.x_idle_check();
     }
@@ -297,6 +307,11 @@ impl XWaylandShellHandler for Loom {
     fn xwayland_shell_state(&mut self) -> &mut XWaylandShellState {
         &mut self.xwayland_shell_state
     }
+
+    /// an X window's surface: at its screen's scale before its first frame is read
+    fn surface_associated(&mut self, _xwm: XwmId, wl_surface: smithay::reexports::wayland_server::protocol::wl_surface::WlSurface, surface: X11Surface) {
+        smithay::wayland::compositor::set_surface_scale(&wl_surface, Some(self.x_scale_at(surface.geometry())));
+    }
 }
 smithay::delegate_xwayland_shell!(Loom);
 
@@ -389,17 +404,6 @@ fn x_programs(display: &str) -> Option<usize> {
     // resource base 0 is the server itself
     let n = clients.iter().filter(|c| c.resource_base != 0).count();
     Some(n.saturating_sub(2))
-}
-
-impl Loom {
-    /// X programs' scale: the screen's (force_zero_scaling, as the user's Hyprland) or 1.
-    pub fn x_apply_scale(&self) {
-        let Some(c) = &self.x.client else { return };
-        let s = if crate::config::xwayland_zero_scaling() { self.output.as_ref().map(|o| o.current_scale().fractional_scale()).unwrap_or(1.0) } else { 1.0 };
-        if let Some(d) = c.get_data::<smithay::xwayland::XWaylandClientData>() {
-            d.compositor_state.set_client_scale(s);
-        }
-    }
 }
 
 impl Loom {

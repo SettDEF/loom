@@ -116,7 +116,7 @@ use std::sync::Arc;
 use std::{any::Any, sync::Mutex};
 
 pub use self::cache::{Cacheable, CachedState, MultiCache};
-pub use self::handlers::{RegionUserData, SubsurfaceCachedState, SubsurfaceUserData, SurfaceUserData};
+pub use self::handlers::{set_surface_scale, surface_scale, RegionUserData, SubsurfaceCachedState, SubsurfaceUserData, SurfaceUserData};
 use self::transaction::TransactionQueue;
 pub use self::transaction::{Barrier, Blocker, BlockerState};
 pub use self::tree::{AlreadyHasRole, TraversalAction};
@@ -247,7 +247,8 @@ pub struct SurfaceAttributes {
     /// associated with this commit has been displayed on the screen.
     pub frame_callbacks: Vec<wl_callback::WlCallback>,
 
-    pub(crate) client_scale: f64,
+    /// the scale the surface's coordinates are in (loom: public, an X surface's own set at its first commit)
+    pub client_scale: f64,
 }
 
 impl Default for SurfaceAttributes {

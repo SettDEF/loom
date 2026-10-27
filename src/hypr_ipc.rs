@@ -409,8 +409,45 @@ impl Loom {
             "togglespecialworkspace" => self.toggle_special(),
             "sendshortcut" => self.send_shortcut(a),
             "exit" => self.signal.stop(),
+            "loomdebug" => match a.trim() {
+                "cursor" => {
+                    self.debug_cursor = !self.debug_cursor;
+                    return format!("cursor log {}", if self.debug_cursor { "on" } else { "off" });
+                }
+                _ => return "loomdebug cursor".into(),
+            },
             // loom's own: the new binary in place, the session kept (restart.rs)
             "loomrestart" => {
+                // X programs (Bitwig, Wine) lose their window in a restart, and some kept running without
+                // one (a second Bitwig then had no window): they are closed first
+                let xs: Vec<String> = self.managed.iter().filter(|m| m.window.x11_surface().is_some()).map(|m| self.class_of(&m.window)).collect();
+                if !xs.is_empty() {
+                    // asked to close as their close button would (Bitwig can ask to save); the restart
+                    // follows when the last one is gone (x_gone)
+                    for m in &self.managed {
+                        if let Some(x) = m.window.x11_surface() {
+                            let _ = x.close();
+                        }
+                    }
+                    self.restart_pending = true;
+                    if a.trim() == "force" {
+                        // force: what has not closed after 3 s is ended, then the restart
+                        let pids: Vec<i32> = self.managed.iter().filter(|m| m.window.x11_surface().is_some() && m.pid > 0).map(|m| m.pid).collect();
+                        if let Some(h) = self.loop_handle.clone() {
+                            let _ = h.insert_source(smithay::reexports::calloop::timer::Timer::from_duration(std::time::Duration::from_secs(3)), move |_, _, s: &mut Loom| {
+                                for p in &pids {
+                                    // Safety: plain kill(2) on a pid that ran an X window here
+                                    unsafe { libc::kill(*p, libc::SIGTERM) };
+                                }
+                                s.restart = true;
+                                s.signal.stop();
+                                smithay::reexports::calloop::timer::TimeoutAction::Drop
+                            });
+                        }
+                        return format!("closing X programs ({}), ending what is left in 3 s, then restarting", xs.join(", "));
+                    }
+                    return format!("closing X programs first ({}); loom restarts when they are gone (loom restart --force: ends them after 3 s)", xs.join(", "));
+                }
                 self.restart = true;
                 self.signal.stop();
             }

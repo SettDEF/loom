@@ -155,6 +155,7 @@ pub fn run(opts: Options) -> Result<(), Box<dyn std::error::Error>> {
         cmd.spawn()?;
     }
 
+    crate::restart::restore_workspaces(&mut state);
     event_loop.run(None, &mut state, |state| {
         frame(state);
         state.after_dispatch();

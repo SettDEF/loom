@@ -115,6 +115,8 @@ The milestones of [PLAN.md](PLAN.md), each step a line; ticked when it works wit
 - [x] the pen (tablet-v2, src/tablet.rs; mouse fallback) and touchpad gestures (Hyprland gesture lines, pointer-gestures to programs; src/gestures.rs)
 - [x] night light: hyprland-ctm-control (hyprsunset) to the CRTC's CTM property, cleared when its client goes, kept across VT switches
 - [ ] input method
+- [ ] tiled windows resize: resizeactive does nothing on a tiled window (wm.rs resize_active), Super+right-drag only moves mwfact sideways (no vertical for tilebottom/tiletop, wrong way for the window right of the master / tileleft), fair and max have nothing to resize
+- [ ] YouTube video freezes in fullscreen (reported 2026-10-27; no error in the session log): suspect vrr,2 turning adaptive sync on, or direct scanout of the video; try with vrr,0
 
 ## 6. Looks
 
@@ -129,3 +131,17 @@ The milestones of [PLAN.md](PLAN.md), each step a line; ticked when it works wit
 
 - [x] a session entry: dist/loom.desktop, scripts/loom-session, `--session` runs exec-once (scripts/install.sh)
 - [ ] a week on it, Hyprland one login away
+
+## X per screen, like Hyprland (2026-10-27)
+X programs saw every screen × the laptop's 1.6 (the AOC as 3072×1728 at 144 dpi): Bitwig and plugins
+picked wrong scales (Terrain 2.4×), X windows were shrunk on the 1.0 screen. Hyprland shows X each
+screen at its real pixels and scales each X window by its own screen. Branch `x-per-screen`.
+- [x] 1. X screen layout at real pixels (src/xscreens.rs; vendor smithay: Output::set_x_geometry, X11Wm::set_x_map): xrandr shows 2560x1600+0 and 1920x1080+2560; X↔logical mapped by the screen a rectangle's middle is on
+- [x] 2. per-window scale (vendor smithay: set_surface_scale over the client's): a 1.6 tile is X 2544x1539 and drawn exactly in its tile (headless snapshot)
+- [x] 3. input per window: pointer, touch, tablet, gestures, relative pointer, cursor hints by the surface's scale (xev: a click at logical 500,400 in the window arrives at 800,640)
+- [x] 4. a window moved to the other screen takes its scale (xterm to the AOC: 1910x1042 X pixels, 1:1)
+- [ ] 5. headless checks done for positions, sizes, clicks (by hand: --size 2560x1600,1920x1080 --scale 1.6); left: menus, Bitwig plugin sizes, cursor on the real screens, then install
+- [ ] Bitwig's cursor (finding 2026-10-27, `hyprctl dispatch loomdebug cursor`, lines "loom: cursor" in the session log): Bitwig's own image (surface from_x, 26×26) does arrive live, but "named default" follows at once, several times at the same pointer position with no motion; check who sends it (Xwayland's cursor-shape for the X core cursor? the per-screen scale mismatch?) and fix with stage 2/3
+- [x] Bitwig's right-click menus in the right place with a window on each screen (fixed by stage 1, confirmed on the real screens 2026-10-27)
+- [ ] Bitwig on the AOC: its UI drawn at the laptop's scale (one Xft.dpi 224 for all X screens, as on Hyprland; Bitwig's own per-display scale?), and a smaller old picture of the window left in its top-left corner (stale frame after the scale change? check)
+- [ ] one cursor size everywhere: an X program's own cursor image (Bitwig's 26×26) is drawn at the size of the theme's arrow (Xcursor.size 48 / the desktop cursor), so switching between Bitwig's cursor and the arrow never changes its size (tty.rs cursor drawing, `cs`)

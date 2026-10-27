@@ -357,6 +357,8 @@ pub fn run(opts: Options) -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // the first tries: a stats line a second while anything happens (frames, render time, GPU vs CPU buffers)
+    // after `loom restart`: the screens show what they showed, reconnecting windows go back to their workspace
+    crate::restart::restore_workspaces(&mut state);
     state.start_stats();
     state.dirty = true;
     event_loop.run(None, &mut state, |state| {
@@ -427,22 +429,18 @@ impl Loom {
                     CursorImageStatus::Hidden => {}
                     CursorImageStatus::Surface(s) => {
                         let hot = smithay::wayland::compositor::with_states(s, |st| st.data_map.get::<smithay::input::pointer::CursorImageSurfaceData>().map(|d| d.lock().unwrap().hotspot)).unwrap_or_default();
-                        // an X program's cursor (Bitwig): drawn by the scale X programs are shrunk by, or
-                        // it showed at 24 / 1.6 = 15 px
+                        // an X program's cursor (Bitwig) comes in X pixels, which are this screen's own pixels
+                        // (xscreens.rs): drawn 1:1, a small one grown to the theme arrow's size (24 or XCURSOR_SIZE)
                         let from_x = smithay::reexports::wayland_server::Resource::client(s).is_some_and(|c| self.x.client.as_ref().is_some_and(|x| x.id() == c.id()));
-                        // (the scale X programs really have, the same on every screen: 1.6 on the 1.0
-                        // screen too, where the screen's own scale left Bitwig's cursor tiny)
-                        // only up to a normal cursor (24, or XCURSOR_SIZE): one X already made big from
-                        // ~/.Xresources (Xcursor.size) stays as it is, a small one of the program's own grows
-                        let cs = if from_x {
-                            let want = std::env::var("XCURSOR_SIZE").ok().and_then(|v| v.parse::<f64>().ok()).unwrap_or(24.0);
+                        let scale = if from_x {
+                            let want = std::env::var("XCURSOR_SIZE").ok().and_then(|v| v.parse::<f64>().ok()).unwrap_or(24.0) * os;
                             let h = smithay::backend::renderer::utils::with_renderer_surface_state(s, |st| st.surface_size().map(|z| z.h as f64)).flatten().unwrap_or(want);
-                            (want / h.max(1.0)).clamp(1.0, self.x_client_scale().max(1.0))
+                            (want / h.max(1.0)).max(1.0)
                         } else {
-                            1.0
+                            os
                         };
-                        let loc = (at - hot.to_f64().to_physical(os * cs)).to_i32_round();
-                        elements.extend(render_elements_from_surface_tree(&mut *r, s, loc, os * cs, 1.0, Kind::Cursor).into_iter().map(TtyElement::Surface));
+                        let loc = (at - hot.to_f64().to_physical(scale)).to_i32_round();
+                        elements.extend(render_elements_from_surface_tree(&mut *r, s, loc, scale, 1.0, Kind::Cursor).into_iter().map(TtyElement::Surface));
                     }
                     CursorImageStatus::Named(icon) => {
                         // the shape asked for (loaded once per screen), the arrow when the theme lacks it

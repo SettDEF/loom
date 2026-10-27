@@ -83,10 +83,10 @@ impl PointerConstraintsHandler for Loom {
             return;
         }
         // Smithay hands the hint on as the program sent it: for an X program in its own (1.6×)
-        // pixels. Taken as loom's, Bitwig's middle-drag (it holds the cursor still and moves it
+        // pixels (its window's screen's scale). Taken as loom's, Bitwig's middle-drag (it holds the cursor still and moves it
         // back) sent the hidden cursor off 1.6× too far, out of its window, and the lock let go
         let from_x = smithay::reexports::wayland_server::Resource::client(surface).is_some_and(|c| self.x.client.as_ref().is_some_and(|x| x.id() == c.id()));
-        let location = if from_x { location.downscale(self.x_client_scale()) } else { location };
+        let location = if from_x { location.downscale(self.x_surface_scale(surface)) } else { location };
         if let Some(origin) = self.surface_origin(surface) {
             self.pointer_at = origin + location;
         }

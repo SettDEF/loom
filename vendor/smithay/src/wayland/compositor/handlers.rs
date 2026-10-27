@@ -80,6 +80,7 @@ where
                     SurfaceUserData {
                         inner: PrivateSurfaceData::new(),
                         alive_tracker: Default::default(),
+                        scale: atomic_float::AtomicF64::new(0.),
                         user_state_type: (std::any::TypeId::of::<D>(), std::any::type_name::<D>()),
                     },
                 );
@@ -153,7 +154,24 @@ impl Cacheable for SurfaceAttributes {
 pub struct SurfaceUserData {
     pub(crate) inner: Mutex<PrivateSurfaceData>,
     alive_tracker: AliveTracker,
+    /// loom: this surface's own client scale (0 = the client's); X windows on screens of different scales
+    pub(crate) scale: atomic_float::AtomicF64,
     pub(super) user_state_type: (std::any::TypeId, &'static str),
+}
+
+/// loom: a surface's own client scale, over its client's (`None` = the client's).
+pub fn set_surface_scale(surface: &WlSurface, scale: Option<f64>) {
+    if let Some(d) = surface.data::<SurfaceUserData>() {
+        d.scale.store(scale.unwrap_or(0.), Ordering::Release);
+    }
+}
+
+/// loom: the scale a surface's coordinates are in: its own, else its client's.
+pub fn surface_scale(surface: &WlSurface, client_scale: f64) -> f64 {
+    match surface.data::<SurfaceUserData>().map(|d| d.scale.load(Ordering::Acquire)) {
+        Some(s) if s > 0. => s,
+        _ => client_scale,
+    }
 }
 
 impl<D> Dispatch<WlSurface, SurfaceUserData, D> for CompositorState
@@ -192,7 +210,7 @@ where
                     None
                 };
 
-                let client_scale = state.client_compositor_state(client).client_scale();
+                let client_scale = surface_scale(surface, state.client_compositor_state(client).client_scale());
                 let offset = offset.map(|p| p.to_f64().to_logical(client_scale).to_i32_round());
 
                 PrivateSurfaceData::with_states(surface, |states| {
@@ -211,7 +229,7 @@ where
                 });
             }
             wl_surface::Request::Damage { x, y, width, height } => {
-                let client_scale = state.client_compositor_state(client).client_scale();
+                let client_scale = surface_scale(surface, state.client_compositor_state(client).client_scale());
                 PrivateSurfaceData::with_states(surface, |states| {
                     states
                         .cached_state
@@ -239,9 +257,18 @@ where
                 });
             }
             wl_surface::Request::SetOpaqueRegion { region } => {
+                // loom: regions are made in the client's scale; a surface with its own one rescales them
+                let client_scale = state.client_compositor_state(client).client_scale();
+                let ratio = client_scale / surface_scale(surface, client_scale);
                 let attributes = region.map(|r| {
                     let attributes_mutex = &r.data::<RegionUserData>().unwrap().inner;
-                    attributes_mutex.lock().unwrap().clone()
+                    let mut a = attributes_mutex.lock().unwrap().clone();
+                    if ratio != 1. {
+                        for (_, rect) in a.rects.iter_mut() {
+                            *rect = rect.to_f64().upscale(ratio).to_i32_round();
+                        }
+                    }
+                    a
                 });
                 PrivateSurfaceData::with_states(surface, |states| {
                     states
@@ -252,9 +279,18 @@ where
                 });
             }
             wl_surface::Request::SetInputRegion { region } => {
+                // loom: regions are made in the client's scale; a surface with its own one rescales them
+                let client_scale = state.client_compositor_state(client).client_scale();
+                let ratio = client_scale / surface_scale(surface, client_scale);
                 let attributes = region.map(|r| {
                     let attributes_mutex = &r.data::<RegionUserData>().unwrap().inner;
-                    attributes_mutex.lock().unwrap().clone()
+                    let mut a = attributes_mutex.lock().unwrap().clone();
+                    if ratio != 1. {
+                        for (_, rect) in a.rects.iter_mut() {
+                            *rect = rect.to_f64().upscale(ratio).to_i32_round();
+                        }
+                    }
+                    a
                 });
                 PrivateSurfaceData::with_states(surface, |states| {
                     states
@@ -265,7 +301,7 @@ where
                 });
             }
             wl_surface::Request::Commit => {
-                let client_scale = state.client_compositor_state(client).client_scale();
+                let client_scale = surface_scale(surface, state.client_compositor_state(client).client_scale());
                 PrivateSurfaceData::with_states(surface, |states| {
                     states
                         .cached_state
@@ -320,7 +356,7 @@ where
                 });
             }
             wl_surface::Request::Offset { x, y } => {
-                let client_scale = state.client_compositor_state(client).client_scale();
+                let client_scale = surface_scale(surface, state.client_compositor_state(client).client_scale());
                 PrivateSurfaceData::with_states(surface, |states| {
                     states
                         .cached_state
@@ -578,7 +614,7 @@ where
     ) {
         match request {
             wl_subsurface::Request::SetPosition { x, y } => {
-                let client_scale = state.client_compositor_state(client).client_scale();
+                let client_scale = surface_scale(&data.surface, state.client_compositor_state(client).client_scale());
                 PrivateSurfaceData::with_states(&data.surface, |state| {
                     state
                         .cached_state

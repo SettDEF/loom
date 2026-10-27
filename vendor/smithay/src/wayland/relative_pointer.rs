@@ -123,11 +123,7 @@ impl WpRelativePointerHandle {
         event: &RelativeMotionEvent,
     ) {
         self.for_each_focused_pointer(surface, |ptr| {
-            let client_scale = ptr
-                .data::<RelativePointerUserData<D>>()
-                .unwrap()
-                .client_scale
-                .load(Ordering::Acquire);
+            let client_scale = crate::wayland::compositor::surface_scale(surface, ptr.data::<RelativePointerUserData<D>>().unwrap().client_scale.load(Ordering::Acquire));
             let delta = event.delta.to_client(client_scale);
             let delta_unaccel = event.delta_unaccel.to_client(client_scale);
 

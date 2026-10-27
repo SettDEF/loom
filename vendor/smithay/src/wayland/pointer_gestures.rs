@@ -199,7 +199,7 @@ impl WpPointerGesturePointerHandle {
             let mut ongoing = data.in_progress_on.lock().unwrap();
             // Check that the ongoing gesture is for this surface.
             if ongoing.as_ref() == Some(surface) {
-                let client_scale = data.client_scale.load(Ordering::Acquire);
+                let client_scale = crate::wayland::compositor::surface_scale(surface, data.client_scale.load(Ordering::Acquire));
                 let delta = event.delta.to_client(client_scale);
                 gesture.update(event.time, delta.x, delta.y);
             } else if ongoing.take().is_some() {
@@ -256,7 +256,7 @@ impl WpPointerGesturePointerHandle {
             let mut ongoing = data.in_progress_on.lock().unwrap();
             // Check that the ongoing gesture is for this surface.
             if ongoing.as_ref() == Some(surface) {
-                let client_scale = data.client_scale.load(Ordering::Acquire);
+                let client_scale = crate::wayland::compositor::surface_scale(surface, data.client_scale.load(Ordering::Acquire));
                 let delta = event.delta.to_client(client_scale);
                 gesture.update(event.time, delta.x, delta.y, event.scale, event.rotation);
             } else if ongoing.take().is_some() {

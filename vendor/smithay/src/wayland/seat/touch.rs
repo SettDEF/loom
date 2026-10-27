@@ -63,11 +63,7 @@ where
         let serial = event.serial;
         let slot = event.slot;
         for_each_focused_touch(seat, self, seq, |touch| {
-            let client_scale = touch
-                .data::<TouchUserData<D>>()
-                .unwrap()
-                .client_scale
-                .load(Ordering::Acquire);
+            let client_scale = crate::wayland::compositor::surface_scale(self, touch.data::<TouchUserData<D>>().unwrap().client_scale.load(Ordering::Acquire));
             let location = event.location.to_client(client_scale);
             touch.down(
                 serial.into(),
@@ -91,11 +87,7 @@ where
     fn motion(&self, seat: &Seat<D>, _data: &mut D, event: &MotionEvent, seq: Serial) {
         let slot = event.slot;
         for_each_focused_touch(seat, self, seq, |touch| {
-            let client_scale = touch
-                .data::<TouchUserData<D>>()
-                .unwrap()
-                .client_scale
-                .load(Ordering::Acquire);
+            let client_scale = crate::wayland::compositor::surface_scale(self, touch.data::<TouchUserData<D>>().unwrap().client_scale.load(Ordering::Acquire));
             let location = event.location.to_client(client_scale);
             touch.motion(event.time, slot.into(), location.x, location.y);
         })

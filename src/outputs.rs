@@ -31,6 +31,7 @@ impl Loom {
         }
         eprintln!("loom: screen {} at {},{} shows workspace {ws}", o.name(), at.x, at.y);
         self.hypr_event(&format!("monitoradded>>{}", o.name()));
+        self.x_layout_apply();
         self.relayout();
     }
 
@@ -66,6 +67,7 @@ impl Loom {
         }
         eprintln!("loom: screen {name} gone");
         self.hypr_event(&format!("monitorremoved>>{name}"));
+        self.x_layout_apply();
         self.relayout();
     }
 
