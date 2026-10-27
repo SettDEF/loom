@@ -33,6 +33,7 @@ impl Loom {
         self.hypr_event(&format!("monitoradded>>{}", o.name()));
         self.x_layout_apply();
         self.relayout();
+        self.greeter_snapshot();
     }
 
     /// A screen gone (unplugged): its workspaces move to the focused screen (or the first).

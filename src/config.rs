@@ -282,6 +282,7 @@ impl crate::state::Loom {
         self.dirty = true;
         eprintln!("loom: config read again ({} binds)", self.binds.binds.len());
         self.hypr_event("configreloaded>>");
+        self.greeter_snapshot();
     }
 
     pub fn reload_config(&mut self) {

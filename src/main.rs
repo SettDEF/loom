@@ -49,6 +49,7 @@ mod winrules;
 mod wm;
 mod xwayland;
 mod xscreens;
+mod greeter;
 
 use std::{path::PathBuf, time::Duration};
 
@@ -65,9 +66,12 @@ fn main() {
     let mut tty = false;
     let mut session = false;
     let mut for_minutes: Option<u64> = None;
+    let mut greeter_dir: Option<PathBuf> = None;
     while let Some(a) = args.next() {
         match a.as_str() {
             "--headless" => headless = true,
+            // the login screen (greeter.rs): DIR is the user's snapshot, the greeter QML runs
+            "--greeter" => greeter_dir = args.next().map(PathBuf::from),
             "--nested" => nested = true,
             "--tty" => tty = true,
             "--session" => session = true,
@@ -148,6 +152,7 @@ fn main() {
                 println!("loom --headless [--size WxH] [--snapshot out.png] [--wait ms] [--socket NAME] [--click X,Y] [--rclick X,Y] [--drag X,Y,X2,Y2] [--keys TEXT] [--input-at ms] [--record DIR] [--binds CONF] [--gpu] [-- CMD …]");
                 println!("loom --tty [--for MIN] [--session] [-- CMD …]   (--session: the login session, the Hyprland config's exec-once programs started)");
                 println!("loom --nested [-- CMD …]");
+                println!("loom --greeter DIR (with --headless/--tty/--nested): the login screen from the snapshot in DIR");
                 return;
             }
             other => {
@@ -155,6 +160,9 @@ fn main() {
                 std::process::exit(2);
             }
         }
+    }
+    if let Some(d) = &greeter_dir {
+        greeter::enter(d, &mut opts.run);
     }
     if tty {
         if let Err(e) = tty::run(tty::Options { socket: opts.socket, run: opts.run, for_minutes, session }) {

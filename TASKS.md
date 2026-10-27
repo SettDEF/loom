@@ -131,6 +131,10 @@ The milestones of [PLAN.md](PLAN.md), each step a line; ticked when it works wit
 
 - [x] a session entry: dist/loom.desktop, scripts/loom-session, `--session` runs exec-once (scripts/install.sh)
 - [ ] a week on it, Hyprland one login away
+- [x] greeter (a): the user's look snapshotted for the login screen, `loom --greeter DIR` shows it (dist/greeter: wallpaper, clock, name, password), headless (docs/greeter.md)
+- [ ] greeter (b): loom-auth, the root PAM helper (mock backend for tests; dist/pam.d/loom)
+- [ ] greeter (c): the handover from the greeter's loom to the user's without a black frame
+- [ ] greeter (d): on the real seat (the user: docs/greeter.md "For the real seat later")
 
 ## X per screen, like Hyprland (2026-10-27)
 X programs saw every screen × the laptop's 1.6 (the AOC as 3072×1728 at 144 dpi): Bitwig and plugins

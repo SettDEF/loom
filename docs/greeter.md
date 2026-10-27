@@ -35,3 +35,19 @@ through PAM, and starts the user's session in the same compositor: no second com
 Login is the one place where a bug locks the user out: build and test it in a VM or the headless
 runner first, keep GDM installed and switchable, and never enable it on the real seat without the
 user doing it themselves.
+
+## Status
+
+- (a) done, headless (2026-10-27): the user's loom writes a snapshot (LOOM_GREETER_DIR, else
+  /var/lib/loom/greeter when writable): `.config/hypr/hyprland.conf` with the screens as loom resolved
+  them (`monitor=desc:…`, real modes and scales) and the keyboard, `greeter.json` (ii's colours, font,
+  clock, cursor from ~/.Xresources, name), the wallpaper copied. `loom --greeter DIR` runs with HOME=DIR
+  and starts dist/greeter/shell.qml (LOOM_GREETER_QML). Test: `LOOM_GREETER_DIR=/tmp/g loom --headless
+  --wait 800`, then `LOOM_GREETER_QML=$PWD/dist/greeter loom --headless --greeter /tmp/g --keys secret
+  --snapshot out.png`.
+- (b) loom-auth with a mock PAM backend, (c) the handover between two looms: next.
+
+## For the real seat later (the user, when they can test)
+
+1. The snapshot folder: `sudo install -d -o caesar -m 755 /var/lib/loom/greeter` (later a dist/
+   tmpfiles entry); then `loom restart` writes it; check `/var/lib/loom/greeter/greeter.json`.
