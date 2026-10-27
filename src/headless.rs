@@ -22,10 +22,9 @@ use smithay::{
         wayland_server::Display,
     },
     utils::Transform,
-    wayland::socket::ListeningSocketSource,
 };
 
-use crate::state::{client_data, Loom};
+use crate::state::Loom;
 
 pub struct Options {
     pub size: (i32, i32),
@@ -54,11 +53,7 @@ pub fn run(opts: Options) -> Result<(), Box<dyn std::error::Error>> {
     let mut state = Loom::new(display.handle(), event_loop.get_signal());
 
     // clients connect here
-    let socket = match &opts.socket {
-        Some(name) => ListeningSocketSource::with_name(name)?,
-        None => ListeningSocketSource::new_auto()?,
-    };
-    let socket_name = socket.socket_name().to_string_lossy().to_string();
+    let (socket_fd, socket_name) = crate::restart::listen(&event_loop.handle(), opts.socket.as_deref())?;
     state.socket_name = Some(socket_name.clone());
     state.loop_handle = Some(event_loop.handle());
     state.init_idle();
@@ -75,9 +70,6 @@ pub fn run(opts: Options) -> Result<(), Box<dyn std::error::Error>> {
         Ok(n) => state.x_display = Some(n),
         Err(e) => eprintln!("loom: no Xwayland: {e}"),
     }
-    event_loop.handle().insert_source(socket, |stream, _, state: &mut Loom| {
-        let _ = state.dh.insert_client(stream, client_data());
-    })?;
     event_loop.handle().insert_source(Generic::new(display, Interest::READ, smithay::reexports::calloop::Mode::Level), |_, display, state: &mut Loom| {
         // Safety: the display is not dropped while the source lives
         unsafe { display.get_mut().dispatch_clients(state).ok() };
@@ -151,7 +143,7 @@ pub fn run(opts: Options) -> Result<(), Box<dyn std::error::Error>> {
     })?;
 
     // what to run in it
-    if !opts.run.is_empty() {
+    if !opts.run.is_empty() && !crate::restart::restarted() {
         let mut cmd = Command::new(&opts.run[0]);
         cmd.args(&opts.run[1..]).env("WAYLAND_DISPLAY", &socket_name).env_remove("DISPLAY");
         if let Some(h) = &state.hypr {
@@ -167,7 +159,7 @@ pub fn run(opts: Options) -> Result<(), Box<dyn std::error::Error>> {
         frame(state);
         state.after_dispatch();
     })?;
-    Ok(())
+    crate::restart::after_loop(state, event_loop, socket_fd, &socket_name)
 }
 
 /// What the frame loop needs of the options.

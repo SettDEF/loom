@@ -43,10 +43,9 @@ use smithay::{
         wayland_server::Display,
     },
     utils::{DeviceFd, Point, Transform},
-    wayland::socket::ListeningSocketSource,
 };
 
-use crate::state::{client_data, Loom};
+use crate::state::Loom;
 
 smithay::backend::renderer::element::render_elements! {
     pub TtyElement<=GlesRenderer>;
@@ -206,7 +205,7 @@ pub fn run(opts: Options) -> Result<(), Box<dyn std::error::Error>> {
     end_other_looms();
 
     // the session: the GPU and input devices, from logind (seatd)
-    let (session, session_events) = LibSeatSession::new().map_err(|e| format!("no seat (run it from a TTY, logged in): {e:?}"))?;
+    let (session, session_events) = seat_session().map_err(|e| format!("no seat (run it from a TTY, logged in): {e:?}"))?;
     eprintln!("loom: seat {}", session.seat());
 
     // the GPU and its screen
@@ -297,11 +296,7 @@ pub fn run(opts: Options) -> Result<(), Box<dyn std::error::Error>> {
     })?;
 
     // the Wayland socket and the rest, as the other backends
-    let socket = match &opts.socket {
-        Some(n) => ListeningSocketSource::with_name(n)?,
-        None => ListeningSocketSource::new_auto()?,
-    };
-    let socket_name = socket.socket_name().to_string_lossy().to_string();
+    let (socket_fd, socket_name) = crate::restart::listen(&event_loop.handle(), opts.socket.as_deref())?;
     state.socket_name = Some(socket_name.clone());
     let conf = PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".config/hypr/hyprland.conf");
     state.binds = crate::binds::Binds::load(&conf);
@@ -318,6 +313,11 @@ pub fn run(opts: Options) -> Result<(), Box<dyn std::error::Error>> {
         // Safety: one thread so far (before the event loop runs)
         unsafe { std::env::set_var("_JAVA_AWT_WM_NONREPARENTING", "1") };
     }
+    // Qt 6 programs (the shell, Dotos, Vitals) reconnect when loom restarts in place (restart.rs)
+    if std::env::var_os("QT_WAYLAND_RECONNECT").is_none() {
+        // Safety: one thread so far (before the event loop runs)
+        unsafe { std::env::set_var("QT_WAYLAND_RECONNECT", "1") };
+    }
     eprintln!("loom: {} env lines from the Hyprland config", state.binds.env.len());
     state.hypr = Some(crate::hypr_ipc::start(&event_loop.handle())?);
     match crate::xwayland::start(&event_loop.handle(), &mut state) {
@@ -329,9 +329,6 @@ pub fn run(opts: Options) -> Result<(), Box<dyn std::error::Error>> {
         }
         Err(e) => eprintln!("loom: no Xwayland: {e}"),
     }
-    event_loop.handle().insert_source(socket, |stream, _, state: &mut Loom| {
-        let _ = state.dh.insert_client(stream, client_data());
-    })?;
     event_loop.handle().insert_source(Generic::new(display, Interest::READ, smithay::reexports::calloop::Mode::Level), |_, display, state: &mut Loom| {
         // Safety: the display is not dropped while the source lives
         unsafe { display.get_mut().dispatch_clients(state).ok() };
@@ -349,10 +346,10 @@ pub fn run(opts: Options) -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // the programs it starts get its display and signature
-    for cmd in [opts.run.join(" ")].into_iter().filter(|c| !c.is_empty()) {
+    for cmd in [opts.run.join(" ")].into_iter().filter(|c| !c.is_empty() && !crate::restart::restarted()) {
         state.spawn(&cmd);
     }
-    if opts.session {
+    if opts.session && !crate::restart::restarted() {
         eprintln!("loom: session: {} exec-once programs", state.binds.exec_once.len());
         for cmd in state.binds.exec_once.clone() {
             state.spawn(&cmd);
@@ -367,7 +364,7 @@ pub fn run(opts: Options) -> Result<(), Box<dyn std::error::Error>> {
         state.after_dispatch();
     })?;
     eprintln!("loom: bye");
-    Ok(())
+    crate::restart::after_loop(state, event_loop, socket_fd, &socket_name)
 }
 
 impl Loom {
@@ -866,5 +863,21 @@ mod edid_tests {
         assert_eq!(model, "TL134ADXP03");
         // hwdata names it; without hwdata the code stands for it
         assert!(make == "Tianma Microelectronics Ltd." || make == "TMA", "{make}");
+    }
+}
+
+/// The seat from logind. Right after `loom restart` the old one may not be let go yet: tried again
+/// for up to two seconds.
+fn seat_session() -> Result<(LibSeatSession, smithay::backend::session::libseat::LibSeatSessionNotifier), smithay::backend::session::libseat::Error> {
+    let mut tries = 0;
+    loop {
+        match LibSeatSession::new() {
+            Err(e) if crate::restart::restarted() && tries < 20 => {
+                tries += 1;
+                eprintln!("loom: seat not free yet ({e:?}), again");
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            r => return r,
+        }
     }
 }

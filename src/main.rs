@@ -38,6 +38,7 @@ mod clipboard;
 mod outputs;
 mod own_x;
 mod render;
+mod restart;
 mod scale;
 mod rounding;
 mod state;
@@ -51,6 +52,11 @@ mod xwayland;
 use std::{path::PathBuf, time::Duration};
 
 fn main() {
+    restart::take_env();
+    // `loom restart`: the running loom (this session's) replaced by the installed binary
+    if std::env::args().nth(1).as_deref() == Some("restart") {
+        std::process::exit(ask_restart());
+    }
     let mut args = std::env::args().skip(1);
     let mut opts = headless::Options { size: (1280, 720), snapshot: None, wait: Duration::from_millis(2000), socket: None, run: Vec::new(), script: Vec::new(), script_at: Duration::from_millis(1200), record: None, binds: None, gpu: false, scale: 1.0, more: Vec::new() };
     let mut headless = false;
@@ -170,5 +176,40 @@ fn main() {
     if let Err(e) = headless::run(opts) {
         eprintln!("loom: {e}");
         std::process::exit(1);
+    }
+}
+
+/// Asks the loom of this session (HYPRLAND_INSTANCE_SIGNATURE) to restart in place.
+fn ask_restart() -> i32 {
+    use std::io::{Read, Write};
+    let Ok(rt) = std::env::var("XDG_RUNTIME_DIR") else {
+        eprintln!("loom restart: no XDG_RUNTIME_DIR");
+        return 1;
+    };
+    // the signature in the environment can be stale (a terminal server started under Hyprland):
+    // else the running loom's own folder, loom_<pid>_… with that pid alive
+    let sock = |sig: &str| format!("{rt}/hypr/{sig}/.socket.sock");
+    let sig = std::env::var("HYPRLAND_INSTANCE_SIGNATURE").ok().filter(|s| s.starts_with("loom_") && std::path::Path::new(&sock(s)).exists()).or_else(|| {
+        std::fs::read_dir(format!("{rt}/hypr")).ok()?.flatten().map(|e| e.file_name().to_string_lossy().to_string()).find(|n| {
+            n.strip_prefix("loom_").and_then(|r| r.split('_').next()).and_then(|p| p.parse::<u32>().ok()).is_some_and(|pid| {
+                std::fs::read_to_string(format!("/proc/{pid}/comm")).is_ok_and(|c| c.trim() == "loom") && std::fs::read(format!("/proc/{pid}/cmdline")).is_ok_and(|c| c.split(|b| *b == 0).any(|a| a == b"--tty"))
+            }) && std::path::Path::new(&sock(n)).exists()
+        })
+    });
+    let Some(sig) = sig else {
+        eprintln!("loom restart: no running loom session found");
+        return 1;
+    };
+    match std::os::unix::net::UnixStream::connect(sock(&sig)) {
+        Ok(mut s) => {
+            let _ = s.write_all(b"dispatch loomrestart");
+            let mut r = String::new();
+            let _ = s.read_to_string(&mut r);
+            0
+        }
+        Err(e) => {
+            eprintln!("loom restart: {e}");
+            1
+        }
     }
 }

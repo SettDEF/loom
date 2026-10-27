@@ -201,6 +201,8 @@ pub struct Loom {
     /// Xwayland's window manager once it runs, its display (DISPLAY=:N for what loom starts)
     pub xwm: Option<smithay::xwayland::X11Wm>,
     pub x_display: Option<u32>,
+    /// `loom restart` asked: the loop stops and the new binary takes over (restart.rs)
+    pub restart: bool,
     /// drag and drop into X programs (XDND), connected at the first such drag
     pub xdnd: Option<crate::xdnd::Xdnd>,
     /// KDE's output devices and their clients (System Settings › Display, kscreen-doctor)
@@ -339,7 +341,8 @@ impl Loom {
             frame_wake_armed: false,
             socket_name: None,
             xwm: None,
-            x_display: None,
+            x_display: crate::restart::x_display(),
+            restart: false,
             xdnd: None,
             own_x: Default::default(),
             x: Default::default(),
@@ -564,7 +567,15 @@ impl CompositorHandler for Loom {
         if let Some(window) = found {
             window.on_commit();
             if let Some(a) = self.managed_of(&window).map(|m| m.addr) {
-                *self.commit_count.entry(a).or_default() += 1;
+                let n = self.commit_count.entry(a).or_default();
+                *n += 1;
+                // an X window's first frame: its place told again. Java (Bitwig) drops the configure
+                // sent while it maps, keeps its startup position and opens menus there (other screen)
+                if *n == 1 {
+                    if let Some(x) = window.x11_surface() {
+                        let _ = x.configure(None);
+                    }
+                }
             }
             // its first frame with something to show: the opening animation starts now
             let has_buffer = smithay::backend::renderer::utils::with_renderer_surface_state(&root, |s| s.buffer().is_some()).unwrap_or(false);

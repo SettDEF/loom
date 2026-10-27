@@ -33,8 +33,11 @@ impl Drop for HyprIpc {
 pub fn start(handle: &LoopHandle<'static, Loom>) -> Result<HyprIpc, Box<dyn std::error::Error>> {
     let runtime = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".into());
     let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
-    let signature = format!("loom_{}_{secs}", std::process::id());
+    // after `loom restart` the same one: the shell's sockets come back at the same path
+    let signature = crate::restart::signature().unwrap_or_else(|| format!("loom_{}_{secs}", std::process::id()));
     let dir = PathBuf::from(runtime).join("hypr").join(&signature);
+    let _ = std::fs::remove_file(dir.join(".socket.sock"));
+    let _ = std::fs::remove_file(dir.join(".socket2.sock"));
     // folders of loom runs that died without cleaning up (killed tests): their pid is gone
     if let Ok(rd) = std::fs::read_dir(dir.parent().unwrap_or(&dir)) {
         for e in rd.flatten() {
@@ -93,7 +96,11 @@ pub fn start(handle: &LoopHandle<'static, Loom>) -> Result<HyprIpc, Box<dyn std:
         Ok(PostAction::Continue)
     })?;
     eprintln!("loom: HYPRLAND_INSTANCE_SIGNATURE={signature}");
-    Ok(HyprIpc { signature, dir, listeners: Vec::new() })
+    let listeners: Vec<UnixStream> = crate::restart::hypr_listeners();
+    for s in &listeners {
+        let _ = s.set_nonblocking(true);
+    }
+    Ok(HyprIpc { signature, dir, listeners })
 }
 
 impl Loom {
@@ -402,6 +409,11 @@ impl Loom {
             "togglespecialworkspace" => self.toggle_special(),
             "sendshortcut" => self.send_shortcut(a),
             "exit" => self.signal.stop(),
+            // loom's own: the new binary in place, the session kept (restart.rs)
+            "loomrestart" => {
+                self.restart = true;
+                self.signal.stop();
+            }
             "dpms" => return self.dpms(a),
             "focusmonitor" => match self.monitor_arg(a) {
                 Some(o) => {
