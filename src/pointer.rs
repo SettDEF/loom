@@ -147,6 +147,19 @@ impl Loom {
                 if pressed { "press" } else { "release" }, button, self.pointer_at.x, self.pointer_at.y,
                 decor, under, consume, self.drag.is_some()
             );
+            // every window there, top first: its box, whether its input region takes the point
+            let at = self.pointer_at;
+            let stack: Vec<String> = self.space.elements().rev().filter_map(|w| {
+                let loc = self.space.element_location(w)?.to_f64();
+                let bbox = w.bbox().to_f64();
+                let local = at - loc;
+                if !bbox.contains(local) {
+                    return None;
+                }
+                let input = smithay::desktop::space::SpaceElement::is_in_input_region(w, &local);
+                Some(format!("{} at {:.0},{:.0} bbox {:?} input {}", self.class_of(w), loc.x, loc.y, (bbox.loc.x as i32, bbox.loc.y as i32, bbox.size.w as i32, bbox.size.h as i32), input))
+            }).collect();
+            eprintln!("loom: click stack: {}", stack.join(" | "));
         }
         if consume {
             return;
