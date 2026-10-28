@@ -601,6 +601,14 @@ impl CompositorHandler for Loom {
             // its first frame with something to show: the opening animation starts now
             let has_buffer = smithay::backend::renderer::utils::with_renderer_surface_state(&root, |s| s.buffer().is_some()).unwrap_or(false);
             if has_buffer {
+                // its first picture: one that waited past DRAW_WAIT has no tile yet, it gets one now
+                let late = self.managed.iter_mut().find(|m| m.window == window && !m.drawn).map(|m| {
+                    m.drawn = true;
+                    m.since.elapsed() >= crate::wm::DRAW_WAIT
+                });
+                if late == Some(true) {
+                    self.relayout();
+                }
                 self.center_if_pending(&window);
                 // it was focused before it could take the keyboard: now it gets it
                 if self.focus_on_map.as_ref() == Some(&window) {

@@ -23,7 +23,15 @@ pub struct Managed {
     pub pinned: bool,
     /// where it was last shown (a hidden workspace's windows keep their place in `hyprctl clients`)
     pub last_at: smithay::utils::Point<i32, Logical>,
+    /// when it was made, and whether it has drawn yet: one that never draws (zett after a restart,
+    /// a 0x0 window) gives up its tile after DRAW_WAIT, and gets it back when it draws
+    pub since: std::time::Instant,
+    pub drawn: bool,
 }
+
+/// How long a new window keeps a tile before its first picture: laid out at once, so it draws at
+/// its tile's size and opens without a jump.
+pub const DRAW_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
 
 // the gaps come from the settings (config.rs: Hyprland's general:gaps_in / gaps_out, init.lua)
 
@@ -54,7 +62,17 @@ impl Loom {
         if ws != self.active_ws && !ruled.is_some_and(|r| r.1) {
             self.switch_workspace(ws);
         }
-        self.managed.push(Managed { window: window.clone(), addr, ws, pid, floating: float_at.is_some(), pinned: false, last_at: Default::default() });
+        self.managed.push(Managed { window: window.clone(), addr, ws, pid, floating: float_at.is_some(), pinned: false, last_at: Default::default(), since: std::time::Instant::now(), drawn: false });
+        // still nothing drawn by then: laid out again without it
+        if let Some(h) = self.loop_handle.clone() {
+            use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
+            let _ = h.insert_source(Timer::from_duration(DRAW_WAIT + std::time::Duration::from_millis(100)), move |_, _, s: &mut crate::state::Loom| {
+                if s.managed.iter().any(|m| m.addr == addr && !m.drawn) {
+                    s.relayout();
+                }
+                TimeoutAction::Drop
+            });
+        }
         if !self.is_shown(ws) {
             self.hypr_event(&format!("openwindow>>{addr:x},{ws},{},{}", self.class_of(&window), self.title_of(&window)));
             self.foreign_opened(addr);
@@ -155,7 +173,7 @@ impl Loom {
 
     /// One workspace's tiled windows in `area`; `raise` puts them on top (the special one).
     fn tile(&mut self, ws: i32, area: Rectangle<i32, Logical>, raise: bool) {
-        let tiled: Vec<(Window, u64)> = self.managed.iter().filter(|m| m.ws == ws && !m.floating && self.fullscreen.as_ref() != Some(&m.window)).map(|m| (m.window.clone(), m.addr)).collect();
+        let tiled: Vec<(Window, u64)> = self.managed.iter().filter(|m| m.ws == ws && !m.floating && self.fullscreen.as_ref() != Some(&m.window) && (m.drawn || m.since.elapsed() < DRAW_WAIT)).map(|m| (m.window.clone(), m.addr)).collect();
         let suit = self.layouts.of(&ws.to_string());
         let rects: Vec<Rectangle<i32, Logical>> = crate::layouts::arrange(tiled.len(), area, &suit)
             .into_iter()
