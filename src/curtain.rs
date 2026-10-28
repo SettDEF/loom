@@ -54,6 +54,13 @@ impl Curtain {
                 // grim writes 8-bit RGB(A) PNGs
                 let dec = png::Decoder::new(std::io::BufReader::new(std::fs::File::open(self.dir.join(format!("{name}.png"))).ok()?));
                 let mut rd = dec.read_info().ok()?;
+                // the greeter's user writes these: a picture bigger than any screen is refused, not
+                // decoded (a huge one would take the new session down at its start)
+                let (iw, ih) = (rd.info().width as u64, rd.info().height as u64);
+                if iw == 0 || ih == 0 || iw > 16384 || ih > 16384 || iw * ih > 8192 * 8192 {
+                    eprintln!("loom: curtain picture {name} refused ({iw}x{ih})");
+                    return None;
+                }
                 let mut buf = vec![0; rd.output_buffer_size()];
                 let info = rd.next_frame(&mut buf).ok()?;
                 let (w, h) = (info.width, info.height);

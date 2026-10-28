@@ -125,11 +125,13 @@ where
         }
     }
     if state.locked() {
-        if let Some(s) = state.lock_surface_on(&output.name()) {
+        let lock = state.lock_surface_on(&output.name());
+        if let Some(s) = lock {
             out.extend(smithay::backend::renderer::element::surface::render_elements_from_surface_tree(renderer, s, Point::<i32, Physical>::from((0, 0)), Scale::from(os), 1.0, smithay::backend::renderer::element::Kind::Unspecified).into_iter().map(R::plain));
         }
-        // misc:session_lock_xray: the desktop under the lock screen, as Hyprland draws it
-        if !state.look.lock_xray {
+        // misc:session_lock_xray: the desktop under the lock screen, as Hyprland draws it; only
+        // under a lock surface: a screen without one (just plugged, the locker crashed) stays black
+        if !state.look.lock_xray || lock.is_none() {
             return out;
         }
     }

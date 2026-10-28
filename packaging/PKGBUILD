@@ -1,0 +1,44 @@
+# loom: the compositor, its X server and its login screen, from this repo (docs/login-screen.md).
+# Build: cd packaging && makepkg -si   (enables nothing: switch the login screen by hand)
+pkgname=loom-git
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="A Wayland compositor that runs the ii shell, with a login screen in the shell's own look"
+arch=(x86_64)
+url="file:///mnt/storage/dev/projects/loom"
+license=(custom)
+depends=(libinput libxkbcommon mesa pam quickshell rsync seatd systemd xorg-xwayland grim)
+makedepends=(cargo git)
+provides=(loom)
+conflicts=(loom)
+backup=(etc/pam.d/loom etc/pam.d/loom-greeter)
+source=("loom::git+file://$(realpath "$startdir/..")")
+sha256sums=(SKIP)
+
+pkgver() {
+  cd loom
+  printf "0.1.0.r%s.%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+}
+
+build() {
+  cd loom
+  CARGO_TARGET_DIR=target cargo build --release --locked --bin loom --bin loom-x --bin loom-auth
+}
+
+package() {
+  cd loom
+  for f in loom loom-x loom-auth; do install -Dm755 "target/release/$f" "$pkgdir/usr/bin/$f"; done
+  install -Dm755 scripts/loom-session "$pkgdir/usr/bin/loom-session"
+  install -Dm644 dist/loom.desktop "$pkgdir/usr/share/wayland-sessions/loom.desktop"
+  sed -i 's|^Exec=.*|Exec=/usr/bin/loom-session|' "$pkgdir/usr/share/wayland-sessions/loom.desktop"
+  install -Dm644 dist/pam.d/loom "$pkgdir/etc/pam.d/loom"
+  install -Dm644 dist/pam.d/loom-greeter "$pkgdir/etc/pam.d/loom-greeter"
+  install -Dm644 dist/sysusers.d/loom.conf "$pkgdir/usr/lib/sysusers.d/loom.conf"
+  install -Dm644 dist/tmpfiles.d/loom.conf "$pkgdir/usr/lib/tmpfiles.d/loom.conf"
+  for u in loom-auth loom-greeter; do
+    install -Dm644 "dist/systemd/$u.service" "$pkgdir/usr/lib/systemd/system/$u.service"
+    sed -i 's|/usr/local/bin/|/usr/bin/|g' "$pkgdir/usr/lib/systemd/system/$u.service"
+  done
+  install -Dm644 dist/greeter/shell.qml "$pkgdir/usr/share/loom/greeter/shell.qml"
+  install -Dm644 docs/login-screen.md "$pkgdir/usr/share/doc/loom/login-screen.md"
+}

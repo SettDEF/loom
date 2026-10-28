@@ -23,6 +23,7 @@ cargo run --release -- --headless --size 1280x720 --snapshot out.png -- alacritt
 | [Effects](docs/effects.md)       | rounded corners, animations              |
 | [Running](docs/running.md)       | headless, nested and TTY modes, scripts  |
 | [Testing](docs/testing.md)       | screenshots, recordings, cost checks     |
+| [Login screen](docs/login-screen.md) | your lock screen as the display manager |
 
 ## Quick settings
 

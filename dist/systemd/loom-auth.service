@@ -1,0 +1,11 @@
+# loom's login screen: the password check and the session start (root; docs/greeter.md)
+[Unit]
+Description=loom login: password check and session start
+After=systemd-user-sessions.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/loom-auth --socket /run/loom/auth.sock --service loom --allow-uid-of loom-greeter --vt 1 --greeter-unit loom-greeter.service --session "loom-session --curtain /run/loom/handover"
+Restart=on-failure
+# no core dumps: a password could be in one
+LimitCORE=0

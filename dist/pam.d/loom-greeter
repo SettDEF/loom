@@ -1,0 +1,6 @@
+#%PAM-1.0
+# loom's login screen user's own session (systemd PAMName=loom-greeter): no password, a logind session
+auth       required     pam_permit.so
+account    required     pam_permit.so
+password   required     pam_deny.so
+session    include      system-login

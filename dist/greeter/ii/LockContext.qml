@@ -73,9 +73,27 @@ Scope {
         root.failed()
     }
 
+    // set once the backend said the session runs: a closed connection after that is no failure
+    property bool started: false
+
+    // an answer that never comes (the backend gone, stuck) must not leave the screen frozen
+    Timer {
+        id: answerTimeout
+        interval: 45000
+        running: root.unlockInProgress && !root.started
+        onTriggered: {
+            auth.connected = false
+            root.fail("No answer from the sign-in service")
+        }
+    }
+
     function tryUnlock(alsoInhibitIdle = false) {
         if (root.unlockInProgress)
             return
+        if (!root.user) {
+            root.fail("No user to sign in (the login screen's snapshot is missing)")
+            return
+        }
         root.alsoInhibitIdle = alsoInhibitIdle
         // power off / reboot from the side panel need no password before login
         if (root.targetAction !== LockContext.ActionEnum.Unlock) {
@@ -90,6 +108,11 @@ Scope {
         id: auth
         path: root.authSocket
         onConnectionStateChanged: {
+            // dropped without a final answer: say so, the field works again
+            if (!connected && root.unlockInProgress && !root.started) {
+                root.fail("The sign-in service stopped")
+                return
+            }
             if (connected) {
                 write(JSON.stringify({ user: root.user, password: root.currentText }) + "\n")
                 flush()
@@ -103,14 +126,17 @@ Scope {
                 if (r.started !== undefined) {
                     auth.connected = false
                     if (!r.started) root.fail(r.message || "The session did not start")
-                    else console.log("greeter: session started for " + root.user)
+                    else {
+                        root.started = true
+                        console.log("greeter: session started for " + root.user)
+                    }
                 } else if (r.ok) {
                     // signed in: the last picture of each screen first (the session's curtain)
                     root.clearText()
                     shots.running = true
                 } else {
-                    auth.connected = false
                     root.fail(r.message)
+                    auth.connected = false
                 }
             }
         }
@@ -119,7 +145,8 @@ Scope {
     // one picture per screen, named as loom names it (curtain.rs reads <output>.png)
     Process {
         id: shots
-        command: ["sh", "-c", "mkdir -p \"$0\" && for o in $(echo \"$1\"); do grim -o \"$o\" \"$0/$o.png\" || exit 1; done", root.handoverDir, Quickshell.screens.map(s => s.name).join(" ")]
+        // the last login's pictures first gone: a failed grim must not show stale ones over the session
+        command: ["sh", "-c", "mkdir -p \"$0\" && rm -f \"$0\"/*.png && for o in $(echo \"$1\"); do grim -o \"$o\" \"$0/$o.png\" || exit 1; done", root.handoverDir, Quickshell.screens.map(s => s.name).join(" ")]
         onExited: (code, status) => {
             if (code !== 0) console.warn("greeter: no last picture (" + code + "), the session starts without its curtain")
             auth.write(JSON.stringify({ start: true, session: root.session }) + "\n")
