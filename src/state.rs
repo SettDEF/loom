@@ -510,6 +510,15 @@ impl CompositorHandler for Loom {
         &client.get_data::<ClientState>().expect("client state").compositor_state
     }
     fn commit(&mut self, surface: &WlSurface) {
+        // a new picture on the cursor surface: Xwayland changes an X program's cursor (Bitwig) this
+        // way, on the surface it already set, so no new cursor request comes; drawn only on the next
+        // redraw, it changed only on clicks
+        if matches!(&self.cursor_status, smithay::input::pointer::CursorImageStatus::Surface(c) if c == surface) {
+            if self.debug_cursor {
+                eprintln!("loom: cursor new picture");
+            }
+            self.dirty = true;
+        }
         // what kind of buffer it brought (GPU or CPU memory): the stats line says how programs draw
         if self.stats_on {
             let kind = smithay::wayland::compositor::with_states(surface, |s| {

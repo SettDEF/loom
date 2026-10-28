@@ -148,8 +148,14 @@ pub fn x_menu_like(x: &X11Surface) -> bool {
         || (x.is_transient_for().is_some() && x.is_decorated())
 }
 
+/// One size only (min = max): a plugin's own window, a fixed dialog. Stretched to a tile it would
+/// draw in a corner of it.
+fn fixed_size(x: &X11Surface) -> bool {
+    matches!((x.min_size(), x.max_size()), (Some(a), Some(b)) if a == b && a.w > 0 && a.h > 0)
+}
+
 fn floats(x: &X11Surface) -> bool {
-    x.is_transient_for().is_some() || matches!(x.window_type(), Some(WmWindowType::Dialog | WmWindowType::Utility | WmWindowType::Splash | WmWindowType::Toolbar))
+    fixed_size(x) || x.is_transient_for().is_some() || matches!(x.window_type(), Some(WmWindowType::Dialog | WmWindowType::Utility | WmWindowType::Splash | WmWindowType::Toolbar))
 }
 
 impl Loom {
@@ -187,7 +193,6 @@ impl XwmHandler for Loom {
     fn new_override_redirect_window(&mut self, _xwm: XwmId, _window: X11Surface) {}
 
     fn map_window_request(&mut self, _xwm: XwmId, x: X11Surface) {
-        let _ = x.set_mapped(true);
         let float = floats(&x);
         let w = Window::new_x11_window(x.clone());
         if float {
@@ -203,6 +208,9 @@ impl XwmHandler for Loom {
         } else {
             self.manage(w);
         }
+        // shown once in place: a program that scales per screen (Bitwig) draws its first frame
+        // at its tile, not at the size and screen it asked for and then half-repainted
+        let _ = x.set_mapped(true);
     }
     fn mapped_override_redirect_window(&mut self, _xwm: XwmId, x: X11Surface) {
         // loom's own drag stand-in is no window to show
@@ -259,10 +267,31 @@ impl XwmHandler for Loom {
         }
     }
     fn property_notify(&mut self, _xwm: XwmId, x: X11Surface, property: smithay::xwayland::xwm::WmWindowProperty) {
-        if property == smithay::xwayland::xwm::WmWindowProperty::Title {
-            if let Some(w) = self.x_window(&x) {
-                self.title_changed_of(&w);
+        use smithay::xwayland::xwm::WmWindowProperty as P;
+        match property {
+            P::Title => {
+                if let Some(w) = self.x_window(&x) {
+                    self.title_changed_of(&w);
+                }
             }
+            // a size fixed after mapping (nih-plug's standalone sets it once its editor is in):
+            // out of the layout, centred at that size
+            P::NormalHints if fixed_size(&x) => {
+                let Some(w) = self.x_window(&x) else { return };
+                if !self.managed_of(&w).is_some_and(|m| !m.floating) {
+                    return;
+                }
+                let size = x.max_size().unwrap_or_default();
+                let screen = self.output.as_ref().and_then(|o| self.space.output_geometry(o)).unwrap_or_default();
+                let loc = (screen.loc.x + (screen.size.w - size.w) / 2, screen.loc.y + (screen.size.h - size.h) / 2);
+                let _ = x.configure(Rectangle::new(loc.into(), size));
+                if let Some(m) = self.managed.iter_mut().find(|m| m.window == w) {
+                    m.floating = true;
+                }
+                self.space.map_element(w, loc, true);
+                self.relayout();
+            }
+            _ => {}
         }
     }
     // a game or X program going fullscreen (_NET_WM_STATE_FULLSCREEN): as the bind does

@@ -349,6 +349,15 @@ impl Loom {
         }
     }
 
+    /// Workspace `ws`'s fullscreen window, else its master (first tiled), else the last focused there.
+    pub fn focus_master(&mut self, ws: i32) {
+        let full = self.fullscreen.clone().filter(|w| self.managed_of(w).is_some_and(|m| m.ws == ws));
+        match full.or_else(|| self.managed.iter().find(|m| m.ws == ws && !m.floating).map(|m| m.window.clone())) {
+            Some(w) => self.focus_window(&w),
+            None => self.focus_next(ws),
+        }
+    }
+
     /// The workspaces in use (with windows, or shown), sorted.
     pub fn workspace_ids(&self) -> Vec<i32> {
         let mut ids: Vec<i32> = self.managed.iter().map(|m| m.ws).chain([self.active_ws]).chain(self.shown_on.values().copied()).collect();

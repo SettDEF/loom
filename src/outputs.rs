@@ -169,6 +169,7 @@ impl Loom {
         }
         if self.output.as_ref() == Some(o) {
             self.lock_frame(o, ms);
+            self.cursor_frame(o, ms);
         }
         // windows on hidden workspaces: a frame callback once a second (as niri), or a program
         // waiting for its next frame stalls, and Qt's unanswered requests fill its socket
@@ -208,6 +209,15 @@ impl Loom {
         }
         if let Some(o) = self.output.clone() {
             self.lock_frame(&o, ms);
+            self.cursor_frame(&o, ms);
+        }
+    }
+
+    /// The cursor surface's frame callback: Xwayland waits for it before the next X cursor, so
+    /// without it an X program's cursor (Bitwig) stayed the first one until a click re-entered
+    fn cursor_frame(&self, o: &smithay::output::Output, ms: std::time::Duration) {
+        if let smithay::input::pointer::CursorImageStatus::Surface(s) = &self.cursor_status {
+            smithay::desktop::utils::send_frames_surface_tree(s, o, ms, Some(std::time::Duration::ZERO), |_, _| Some(o.clone()));
         }
     }
 

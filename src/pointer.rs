@@ -36,9 +36,12 @@ impl Loom {
     /// The pointer to `at` (compositor space).
     pub fn pointer_move(&mut self, at: Point<f64, Logical>, time: u32) {
         self.activity(false);
-        // the focus follows the pointer onto another screen
+        // the focus follows the pointer onto another screen, to its master (not while a window is dragged over)
         if let Some(o) = self.output_at(at).filter(|o| Some(o) != self.output.as_ref()) {
             self.focus_output(&o);
+            if self.drag.is_none() {
+                self.focus_master(self.active_ws);
+            }
         }
         self.pointer_at = at;
         // an X program dragging over Wayland windows (xdnd.rs)
