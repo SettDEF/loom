@@ -765,11 +765,19 @@ impl Loom {
         for f in floats {
             self.space.raise_element(&f, false);
         }
-        // a fullscreen window stays over all of it: raised under it, a window took its clicks (it was drawn on top
-        // but no longer first in the stack the pointer looks through)
-        if let Some(full) = self.fullscreen.clone().filter(|f| self.managed_of(f).is_some_and(|m| m.ws == ws)) {
+        self.keep_fullscreen_on_top();
+        self.dirty = true;
+    }
+}
+
+impl Loom {
+    /// A fullscreen window stays first in the stack on its workspace: any window raised after it (focus, a new
+    /// X window, a rule) was drawn under it but took its clicks, and a floating one could end up behind the layout
+    pub fn keep_fullscreen_on_top(&mut self) {
+        let Some(full) = self.fullscreen.clone() else { return };
+        let Some(ws) = self.managed_of(&full).map(|m| m.ws) else { return };
+        if self.shown_on.values().any(|w| *w == ws) {
             self.space.raise_element(&full, false);
         }
-        self.dirty = true;
     }
 }

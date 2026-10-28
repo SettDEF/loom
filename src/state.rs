@@ -429,6 +429,7 @@ impl Loom {
             self.foreign_all_changed();
         }
         self.space.raise_element(window, true);
+        self.keep_fullscreen_on_top();
         // floating ones stay over the tiled one just raised, and X is told the same order
         self.x_sync_stacking();
         for w in self.space.elements() {
