@@ -350,7 +350,11 @@ impl Loom {
             }
             // the AwesomeWM layouts' messages (suit, next, mwfact, nmaster, ncol, swapmaster, reset)
             "layoutmsg" => {
-                let ws = self.active_ws.to_string();
+                // "ws:NAME msg" for a workspace that is not the focused one (the bar's workspace menu)
+                let (ws, a) = match a.strip_prefix("ws:").and_then(|r| r.split_once(' ')) {
+                    Some((w, rest)) => (w.to_string(), rest.trim()),
+                    None => (self.active_ws.to_string(), a),
+                };
                 match self.layouts.message(&ws, a) {
                     Ok(swap) => {
                         if swap {

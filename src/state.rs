@@ -421,6 +421,7 @@ impl Loom {
         }
         if self.focused.as_ref() != Some(window) {
             self.focused = Some(window.clone());
+            self.center_master_on_top();
             let addr = self.managed_of(window).map(|m| m.addr).unwrap_or(0);
             self.hypr_event(&format!("activewindow>>{},{}", self.class_of(window), self.title_of(window)));
             self.hypr_event(&format!("activewindowv2>>{addr:x}"));

@@ -97,7 +97,6 @@ fn tile(n: usize, a: B, s: &Suit, orient: char) -> Vec<B> {
     out
 }
 
-/// fair: a grid, the last line stretched.
 /// center: the master floats in the middle with `pad` of room to the left and right edge (60 % of it above and
 /// below), drawn over the rest, which share the whole screen behind it (fair). The window manager raises the
 /// master and puts a new window first, so it becomes the master. Super+minus / Super+plus: layoutmsg pad -40 / +40.
@@ -113,6 +112,7 @@ fn center(n: usize, a: B, s: &Suit) -> Vec<B> {
     out
 }
 
+/// fair: a grid, the last line stretched.
 fn fair(n: usize, a: B, horizontal: bool) -> Vec<B> {
     if n == 2 {
         return slices(a, 2, horizontal);
@@ -214,6 +214,13 @@ pub fn arrange(n: usize, area: Rectangle<i32, Logical>, s: &Suit) -> Vec<Rectang
     (0..n).map(|i| boxes.get(i).copied().unwrap_or(a)).map(|x| Rectangle::new((x.x, x.y).into(), (x.w, x.h).into())).collect()
 }
 
+/// a master share step as center's padding in px, the other way round (+0.05 = 40 px less room)
+fn neg_px(arg: &str) -> String {
+    let v: f64 = arg.trim().parse().unwrap_or(0.0);
+    let px = -v * 800.0;
+    if arg.trim().starts_with(['+', '-']) { format!("{px:+}") } else { format!("{}", (1.0 - v) * 800.0) }
+}
+
 /// `+0.05`, `-1`, `0.6`: added, taken, or set; kept in lo..=hi.
 fn adjust(cur: f64, arg: &str, lo: f64, hi: f64) -> f64 {
     let arg = arg.trim();
@@ -272,9 +279,12 @@ impl Layouts {
                 let n = SUITS.len();
                 s.suit = SUITS[if cmd == "next" { (i + 1) % n } else { (i + n - 1) % n }].into();
             }
-            "mwfact" | "splitratio" => s.mwfact = adjust(s.mwfact, arg, 0.05, 0.95),
+            // center has no master share: the master size keys grow or shrink the floating master instead
+            "mwfact" | "mfact" | "splitratio" if s.suit == "center" => s.pad = adjust(s.pad as f64, &neg_px(arg), 0.0, 1200.0) as i32,
+            "mwfact" | "mfact" | "splitratio" => s.mwfact = adjust(s.mwfact, arg, 0.05, 0.95),
             "nmaster" => s.nmaster = adjust(s.nmaster as f64, arg, 0.0, 10.0) as usize,
             "ncol" => s.ncol = adjust(s.ncol as f64, arg, 1.0, 10.0) as usize,
+            "pad" if s.suit != "center" => return Err("pad: only the center layout has it".into()),
             "pad" => s.pad = adjust(s.pad as f64, arg, 0.0, 1200.0) as i32,
             "reset" => *s = Suit::default(),
             "swapmaster" => {
@@ -298,6 +308,22 @@ mod tests {
     }
     fn s(suit: &str) -> Suit {
         Suit { suit: suit.into(), ..Suit::default() }
+    }
+
+    #[test]
+    fn keys_next_prev_pad_and_mfact() {
+        let mut l = Layouts { by_ws: Default::default() };
+        l.message("3", "next").unwrap();
+        assert_eq!(l.of("3").suit, "center", "next from tile");
+        l.message("3", "prev").unwrap();
+        assert_eq!(l.of("3").suit, "tile", "and back");
+        assert!(l.message("3", "pad +40").is_err(), "pad outside center is refused");
+        assert_eq!(l.of("3").pad, 160, "and changes nothing");
+        l.message("3", "mfact +0.1").unwrap();
+        assert_eq!(l.of("3").mwfact, 0.6, "the keybinds' mfact works");
+        l.message("3", "suit center").unwrap();
+        l.message("3", "mfact +0.05").unwrap();
+        assert_eq!(l.of("3").pad, 120, "in center a bigger master is less room");
     }
 
     #[test]
