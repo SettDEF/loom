@@ -159,6 +159,17 @@ fn floats(x: &X11Surface) -> bool {
 }
 
 impl Loom {
+    /// A floating X window kept on the free part of the screen it is on: Bitwig put its plugin
+    /// windows at the top left, under the bar, where the bar took their clicks
+    fn x_inside(&self, loc: smithay::utils::Point<i32, Logical>, size: smithay::utils::Size<i32, Logical>) -> smithay::utils::Point<i32, Logical> {
+        let mid = (loc.x + size.w / 2, loc.y + size.h / 2);
+        let o = self.outputs.iter().find(|o| self.space.output_geometry(o).is_some_and(|g| g.contains(mid))).or(self.output.as_ref());
+        let Some(area) = o.and_then(|o| self.area_of(o)) else { return loc };
+        let x = loc.x.min(area.loc.x + area.size.w - size.w).max(area.loc.x);
+        let y = loc.y.min(area.loc.y + area.size.h - size.h).max(area.loc.y);
+        (x, y).into()
+    }
+
     fn x_window(&self, x: &X11Surface) -> Option<Window> {
         self.space.elements().find(|w| w.x11_surface() == Some(x)).cloned().or_else(|| self.managed.iter().find(|m| m.window.x11_surface() == Some(x)).map(|m| m.window.clone()))
     }
@@ -203,7 +214,8 @@ impl XwmHandler for Loom {
             let screen = self.output.as_ref().and_then(|o| self.space.output_geometry(o)).unwrap_or_default();
             let own = x.geometry().loc;
             let loc = if x_menu_like(&x) && (own.x != 0 || own.y != 0) { (own.x, own.y) } else { (screen.loc.x + (screen.size.w - size.w) / 2, screen.loc.y + (screen.size.h - size.h) / 2) };
-            let _ = x.configure(Rectangle::new(loc.into(), size));
+            let loc = self.x_inside(loc.into(), size);
+            let _ = x.configure(Rectangle::new(loc, size));
             self.manage_floating(w, loc.into());
         } else {
             self.manage(w);
@@ -251,6 +263,7 @@ impl XwmHandler for Loom {
         if let Some(v) = nh {
             g.size.h = v as i32;
         }
+        g.loc = self.x_inside(g.loc, g.size);
         let _ = x.configure(g);
         if let Some(w) = self.x_window(&x) {
             self.space.map_element(w, g.loc, false);

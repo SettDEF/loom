@@ -761,10 +761,11 @@ impl Loom {
             self.space.raise_element(w, false);
         }
         let xs: Vec<smithay::xwayland::X11Surface> = self.space.elements().filter_map(|w| w.x11_surface().cloned()).collect();
+        // one pass from the top down, each put just under the one above: raised one by one, a parent
+        // (Bitwig) stood over its plugin window for a moment, and the pointer on the plugin got
+        // Bitwig's cursor on every click
         if let Some(wm) = self.xwm.as_mut() {
-            for x in &xs {
-                let _ = wm.raise_window(x);
-            }
+            let _ = wm.update_stacking_order_downwards(xs.iter().rev());
         }
     }
 }
