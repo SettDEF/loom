@@ -21,11 +21,13 @@ pub struct Suit {
     pub ncol: usize,
     /// center: the room between the master and the screen's left and right edge (px; top and bottom 60 % of it)
     pub pad: i32,
+    /// the other layouts: room around the whole tiled area (px), also by Super+minus / Super+plus
+    pub outer: i32,
 }
 
 impl Default for Suit {
     fn default() -> Self {
-        Suit { suit: "tile".into(), mwfact: 0.5, nmaster: 1, ncol: 1, pad: 160 }
+        Suit { suit: "tile".into(), mwfact: 0.5, nmaster: 1, ncol: 1, pad: 160, outer: 0 }
     }
 }
 
@@ -194,6 +196,8 @@ pub fn arrange(n: usize, area: Rectangle<i32, Logical>, s: &Suit) -> Vec<Rectang
         return Vec::new();
     }
     let a = b(area.loc.x, area.loc.y, area.size.w, area.size.h);
+    // the margin the other layouts keep around all of them (center has its own pad)
+    let a = if s.suit != "center" && s.outer > 0 { let o = s.outer.min(a.w / 3).min(a.h / 3); b(a.x + o, a.y + o, a.w - 2 * o, a.h - 2 * o) } else { a };
     let boxes = if s.suit == "center" {
         center(n, a, s)
     } else if n == 1 || s.suit == "max" {
@@ -251,7 +255,7 @@ impl Layouts {
             for (ws, v) in o {
                 let suit = v["suit"].as_str().unwrap_or("tile");
                 if SUITS.contains(&suit) {
-                    by_ws.insert(ws, Suit { suit: suit.into(), mwfact: v["mwfact"].as_f64().unwrap_or(0.5), nmaster: v["nmaster"].as_u64().unwrap_or(1) as usize, ncol: v["ncol"].as_u64().unwrap_or(1) as usize, pad: v["pad"].as_i64().unwrap_or(160) as i32 });
+                    by_ws.insert(ws, Suit { suit: suit.into(), mwfact: v["mwfact"].as_f64().unwrap_or(0.5), nmaster: v["nmaster"].as_u64().unwrap_or(1) as usize, ncol: v["ncol"].as_u64().unwrap_or(1) as usize, pad: v["pad"].as_i64().unwrap_or(160) as i32, outer: v["outer"].as_i64().unwrap_or(0) as i32 });
                 }
             }
         }
@@ -259,7 +263,7 @@ impl Layouts {
     }
 
     fn save(&self) {
-        let o: serde_json::Map<String, serde_json::Value> = self.by_ws.iter().map(|(k, s)| (k.clone(), serde_json::json!({ "suit": s.suit, "mwfact": (s.mwfact * 100.0).round() / 100.0, "nmaster": s.nmaster, "ncol": s.ncol, "pad": s.pad }))).collect();
+        let o: serde_json::Map<String, serde_json::Value> = self.by_ws.iter().map(|(k, s)| (k.clone(), serde_json::json!({ "suit": s.suit, "mwfact": (s.mwfact * 100.0).round() / 100.0, "nmaster": s.nmaster, "ncol": s.ncol, "pad": s.pad, "outer": s.outer }))).collect();
         let _ = std::fs::write(home().join(".cache/loom-awesome.json"), serde_json::Value::Object(o).to_string());
     }
 
@@ -284,7 +288,8 @@ impl Layouts {
             "mwfact" | "mfact" | "splitratio" => s.mwfact = adjust(s.mwfact, arg, 0.05, 0.95),
             "nmaster" => s.nmaster = adjust(s.nmaster as f64, arg, 0.0, 10.0) as usize,
             "ncol" => s.ncol = adjust(s.ncol as f64, arg, 1.0, 10.0) as usize,
-            "pad" if s.suit != "center" => return Err("pad: only the center layout has it".into()),
+            // outside center: the margin around all the tiled windows
+            "pad" if s.suit != "center" => s.outer = adjust(s.outer as f64, arg, 0.0, 600.0) as i32,
             "pad" => s.pad = adjust(s.pad as f64, arg, 0.0, 1200.0) as i32,
             "reset" => *s = Suit::default(),
             "swapmaster" => {
@@ -317,8 +322,12 @@ mod tests {
         assert_eq!(l.of("3").suit, "center", "next from tile");
         l.message("3", "prev").unwrap();
         assert_eq!(l.of("3").suit, "tile", "and back");
-        assert!(l.message("3", "pad +40").is_err(), "pad outside center is refused");
-        assert_eq!(l.of("3").pad, 160, "and changes nothing");
+        l.message("3", "pad +40").unwrap();
+        assert_eq!((l.of("3").pad, l.of("3").outer), (160, 40), "outside center the keys set the outer margin, not center's pad");
+        let r = arrange(1, area(), &l.of("3"));
+        assert_eq!((r[0].loc.x, r[0].loc.y, r[0].size.w), (40, 40, 920), "the tiled area keeps it on every side");
+        l.message("3", "pad -100").unwrap();
+        assert_eq!(l.of("3").outer, 0, "never below none");
         l.message("3", "mfact +0.1").unwrap();
         assert_eq!(l.of("3").mwfact, 0.6, "the keybinds' mfact works");
         l.message("3", "suit center").unwrap();
