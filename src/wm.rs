@@ -765,6 +765,11 @@ impl Loom {
         for f in floats {
             self.space.raise_element(&f, false);
         }
+        // a fullscreen window stays over all of it: raised under it, a window took its clicks (it was drawn on top
+        // but no longer first in the stack the pointer looks through)
+        if let Some(full) = self.fullscreen.clone().filter(|f| self.managed_of(f).is_some_and(|m| m.ws == ws)) {
+            self.space.raise_element(&full, false);
+        }
         self.dirty = true;
     }
 }
