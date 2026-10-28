@@ -237,4 +237,16 @@ pub fn restore_workspaces(state: &mut crate::state::Loom) {
     if let Some(f) = v["focused"].as_str().and_then(|n| outputs.iter().find(|o| o.name() == n)).cloned() {
         state.focus_output(&f);
     }
+    // the shell kept its event socket through the restart, so it never read the state again:
+    // its workspaces and windows stayed as before (old addresses). configreloaded makes Quickshell
+    // read monitors, workspaces and windows anew (ii also re-reads keybinds, layouts, the night
+    // light); once now and once when the windows that reconnect are back
+    state.hypr_event("configreloaded>>");
+    if let Some(h) = state.loop_handle.clone() {
+        use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
+        let _ = h.insert_source(Timer::from_duration(std::time::Duration::from_secs(3)), |_, _, s: &mut crate::state::Loom| {
+            s.hypr_event("configreloaded>>");
+            TimeoutAction::Drop
+        });
+    }
 }
