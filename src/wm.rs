@@ -62,7 +62,9 @@ impl Loom {
         if ws != self.active_ws && !ruled.is_some_and(|r| r.1) {
             self.switch_workspace(ws);
         }
-        self.managed.push(Managed { window: window.clone(), addr, ws, pid, floating: float_at.is_some(), pinned: false, last_at: Default::default(), since: std::time::Instant::now(), drawn: false });
+        let m = Managed { window: window.clone(), addr, ws, pid, floating: float_at.is_some(), pinned: false, last_at: Default::default(), since: std::time::Instant::now(), drawn: false };
+        // on a center workspace a new tiled window goes first: it becomes the master, floating in the middle
+        if !m.floating && self.layouts.of(&ws.to_string()).suit == "center" { self.managed.insert(0, m) } else { self.managed.push(m) }
         // still nothing drawn by then: laid out again without it
         if let Some(h) = self.loop_handle.clone() {
             use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
@@ -181,7 +183,9 @@ impl Loom {
             .collect();
         let now = std::time::Instant::now();
         let maxed = self.maximized.clone();
-        for ((win, addr), rect) in tiled.into_iter().zip(rects) {
+        // center: the master (first) floats over the others, so it is raised; the rest stay under it
+        let center = suit.suit == "center";
+        for (i, ((win, addr), rect)) in tiled.into_iter().zip(rects).enumerate() {
             // maximized: the whole area; a title bar (ii-decor) takes its top, the window the rest
             let rect = if maxed.as_ref() == Some(&win) {
                 let g = self.look.gaps_in.round() as i32;
@@ -189,7 +193,7 @@ impl Loom {
             } else {
                 rect
             };
-            let raise = raise || maxed.as_ref() == Some(&win);
+            let raise = raise || maxed.as_ref() == Some(&win) || (center && i == 0);
             let bh = self.bar_height(&win).round() as i32;
             let rect = Rectangle::new((rect.loc.x, rect.loc.y + bh).into(), (rect.size.w, (rect.size.h - bh).max(1)).into());
             if let Some(t) = win.toplevel() {

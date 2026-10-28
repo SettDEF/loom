@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 
 use smithay::utils::{Logical, Rectangle};
 
-pub const SUITS: [&str; 13] = ["tile", "tileleft", "tilebottom", "tiletop", "fair", "fairh", "spiral", "dwindle", "max", "cornernw", "cornerne", "cornersw", "cornerse"];
+pub const SUITS: [&str; 14] = ["tile", "center", "tileleft", "tilebottom", "tiletop", "fair", "fairh", "spiral", "dwindle", "max", "cornernw", "cornerne", "cornersw", "cornerse"];
 
 /// A workspace's layout, as an Awesome tag has it.
 #[derive(Clone, Debug, PartialEq)]
@@ -19,11 +19,13 @@ pub struct Suit {
     pub mwfact: f64,
     pub nmaster: usize,
     pub ncol: usize,
+    /// center: the room between the master and the screen's left and right edge (px; top and bottom 60 % of it)
+    pub pad: i32,
 }
 
 impl Default for Suit {
     fn default() -> Self {
-        Suit { suit: "tile".into(), mwfact: 0.5, nmaster: 1, ncol: 1 }
+        Suit { suit: "tile".into(), mwfact: 0.5, nmaster: 1, ncol: 1, pad: 160 }
     }
 }
 
@@ -96,6 +98,21 @@ fn tile(n: usize, a: B, s: &Suit, orient: char) -> Vec<B> {
 }
 
 /// fair: a grid, the last line stretched.
+/// center: the master floats in the middle with `pad` of room to the left and right edge (60 % of it above and
+/// below), drawn over the rest, which share the whole screen behind it (fair). The window manager raises the
+/// master and puts a new window first, so it becomes the master. Super+minus / Super+plus: layoutmsg pad -40 / +40.
+fn center(n: usize, a: B, s: &Suit) -> Vec<B> {
+    let pad = s.pad.clamp(0, a.w / 3);
+    let vpad = (pad as f64 * 0.6) as i32;
+    let mut out = vec![b(a.x + pad, a.y + vpad, a.w - 2 * pad, a.h - 2 * vpad)];
+    match n.saturating_sub(1) {
+        0 => {}
+        1 => out.push(a),
+        k => out.extend(fair(k, a, false)),
+    }
+    out
+}
+
 fn fair(n: usize, a: B, horizontal: bool) -> Vec<B> {
     if n == 2 {
         return slices(a, 2, horizontal);
@@ -177,7 +194,9 @@ pub fn arrange(n: usize, area: Rectangle<i32, Logical>, s: &Suit) -> Vec<Rectang
         return Vec::new();
     }
     let a = b(area.loc.x, area.loc.y, area.size.w, area.size.h);
-    let boxes = if n == 1 || s.suit == "max" {
+    let boxes = if s.suit == "center" {
+        center(n, a, s)
+    } else if n == 1 || s.suit == "max" {
         vec![a; n]
     } else {
         match s.suit.as_str() {
@@ -225,7 +244,7 @@ impl Layouts {
             for (ws, v) in o {
                 let suit = v["suit"].as_str().unwrap_or("tile");
                 if SUITS.contains(&suit) {
-                    by_ws.insert(ws, Suit { suit: suit.into(), mwfact: v["mwfact"].as_f64().unwrap_or(0.5), nmaster: v["nmaster"].as_u64().unwrap_or(1) as usize, ncol: v["ncol"].as_u64().unwrap_or(1) as usize });
+                    by_ws.insert(ws, Suit { suit: suit.into(), mwfact: v["mwfact"].as_f64().unwrap_or(0.5), nmaster: v["nmaster"].as_u64().unwrap_or(1) as usize, ncol: v["ncol"].as_u64().unwrap_or(1) as usize, pad: v["pad"].as_i64().unwrap_or(160) as i32 });
                 }
             }
         }
@@ -233,7 +252,7 @@ impl Layouts {
     }
 
     fn save(&self) {
-        let o: serde_json::Map<String, serde_json::Value> = self.by_ws.iter().map(|(k, s)| (k.clone(), serde_json::json!({ "suit": s.suit, "mwfact": (s.mwfact * 100.0).round() / 100.0, "nmaster": s.nmaster, "ncol": s.ncol }))).collect();
+        let o: serde_json::Map<String, serde_json::Value> = self.by_ws.iter().map(|(k, s)| (k.clone(), serde_json::json!({ "suit": s.suit, "mwfact": (s.mwfact * 100.0).round() / 100.0, "nmaster": s.nmaster, "ncol": s.ncol, "pad": s.pad }))).collect();
         let _ = std::fs::write(home().join(".cache/loom-awesome.json"), serde_json::Value::Object(o).to_string());
     }
 
@@ -256,6 +275,7 @@ impl Layouts {
             "mwfact" | "splitratio" => s.mwfact = adjust(s.mwfact, arg, 0.05, 0.95),
             "nmaster" => s.nmaster = adjust(s.nmaster as f64, arg, 0.0, 10.0) as usize,
             "ncol" => s.ncol = adjust(s.ncol as f64, arg, 1.0, 10.0) as usize,
+            "pad" => s.pad = adjust(s.pad as f64, arg, 0.0, 1200.0) as i32,
             "reset" => *s = Suit::default(),
             "swapmaster" => {
                 self.save();
@@ -278,6 +298,21 @@ mod tests {
     }
     fn s(suit: &str) -> Suit {
         Suit { suit: suit.into(), ..Suit::default() }
+    }
+
+    #[test]
+    fn center_floats_the_master_and_puts_the_rest_behind_on_the_whole_screen() {
+        let one = arrange(1, area(), &s("center"));
+        assert_eq!((one[0].loc.x, one[0].loc.y, one[0].size.w, one[0].size.h), (160, 96, 680, 408), "alone: still in the middle");
+        let r = arrange(3, area(), &s("center"));
+        assert_eq!((r[0].loc.x, r[0].size.w), (160, 680), "the master keeps its padding");
+        assert_eq!(r[1].size.w * r[1].size.h + r[2].size.w * r[2].size.h, 1000 * 600, "the other two share the whole screen behind it");
+        let mut l = Layouts { by_ws: Default::default() };
+        l.message("1", "suit center").unwrap();
+        l.message("1", "pad +40").unwrap();
+        assert_eq!(l.of("1").pad, 200, "Super+plus widens the room");
+        l.message("1", "pad -400").unwrap();
+        assert_eq!(l.of("1").pad, 0, "never below none");
     }
 
     #[test]
