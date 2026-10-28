@@ -749,21 +749,22 @@ impl Loom {
 }
 
 impl Loom {
-    /// center: the focused window is the master: a window behind that takes the focus (click, keys) swaps
-    /// places with it and moves into the middle (loom has no focus-follows-mouse, so hovering never swaps)
+    /// center: a window behind the floating master that takes the focus comes to the front, nothing moves
+    /// (swapping it into the master moved windows on every focus change and confused the shell)
     pub fn center_master_on_top(&mut self) {
         let ws = self.active_ws;
         if self.layouts.of(&ws.to_string()).suit != "center" {
             return;
         }
         let Some(w) = self.focused.clone() else { return };
-        let first = self.managed.iter().position(|m| m.ws == ws && !m.floating);
-        let me = self.managed.iter().position(|m| m.window == w && m.ws == ws && !m.floating);
-        if let (Some(a), Some(b)) = (first, me) {
-            if a != b {
-                self.managed.swap(a, b);
-                self.relayout();
-            }
+        if !self.managed.iter().any(|m| m.window == w && m.ws == ws && !m.floating) {
+            return;
         }
+        self.space.raise_element(&w, false);
+        let floats: Vec<Window> = self.managed.iter().filter(|m| m.ws == ws && m.floating).map(|m| m.window.clone()).collect();
+        for f in floats {
+            self.space.raise_element(&f, false);
+        }
+        self.dirty = true;
     }
 }
