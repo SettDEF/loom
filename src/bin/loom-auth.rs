@@ -287,6 +287,17 @@ fn start_session(o: &Opts, name: &str, pam: Option<Pam>) -> Result<u32, String> 
     std::process::exit(0)
 }
 
+/// A session's Exec= from /usr/share/wayland-sessions (only a plain file name there: nothing else runs).
+fn session_exec(file: &str) -> Option<String> {
+    if file.contains('/') || !file.ends_with(".desktop") {
+        return None;
+    }
+    let text = std::fs::read_to_string(std::path::Path::new("/usr/share/wayland-sessions").join(file)).ok()?;
+    let exec = text.lines().find_map(|l| l.strip_prefix("Exec="))?.trim();
+    // desktop-entry field codes (%f, %u …) are not for a session
+    Some(exec.split_whitespace().filter(|w| !w.starts_with('%')).collect::<Vec<_>>().join(" "))
+}
+
 /// One sign-in: {user, password} → {ok} or {ok: false, message}; after ok, {start: true} →
 /// {started: true}: the greeter took its last picture first (the new session's curtain).
 fn serve(o: &Opts, s: &UnixStream) {
@@ -327,6 +338,16 @@ fn serve(o: &Opts, s: &UnixStream) {
         return;
     }
     let pam = if unsafe { libc::getuid() } == 0 { pam } else { None };
+    // the desktop picked on the login screen; loom (and no choice) keeps loom's own start with the curtain
+    let cmd = serde_json::from_str::<serde_json::Value>(&line).ok().and_then(|v| v["session"].as_str().map(String::from)).filter(|f| !f.starts_with("loom")).and_then(|f| session_exec(&f));
+    let o2;
+    let o = match cmd {
+        Some(c) => {
+            o2 = Opts { session: c, socket: o.socket.clone(), service: o.service.clone(), allow_uid: o.allow_uid, mock: o.mock.clone(), vt: o.vt };
+            &o2
+        }
+        None => o,
+    };
     match start_session(o, &user, pam) {
         Ok(pid) => {
             let _ = writeln!(&*s, "{}", serde_json::json!({ "started": true, "pid": pid }));

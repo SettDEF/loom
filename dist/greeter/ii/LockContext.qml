@@ -28,6 +28,8 @@ Scope {
     readonly property string authSocket: Quickshell.env("LOOM_AUTH_SOCKET") || "/run/loom/auth.sock"
     readonly property string handoverDir: Quickshell.env("LOOM_HANDOVER_DIR") || "/run/loom/handover"
     property string user: ""
+    // the desktop to start: a file in /usr/share/wayland-sessions (SessionPicker)
+    property string session: ""
     property string message: ""
 
     FileView {
@@ -120,7 +122,7 @@ Scope {
         command: ["sh", "-c", "mkdir -p \"$0\" && for o in $(echo \"$1\"); do grim -o \"$o\" \"$0/$o.png\" || exit 1; done", root.handoverDir, Quickshell.screens.map(s => s.name).join(" ")]
         onExited: (code, status) => {
             if (code !== 0) console.warn("greeter: no last picture (" + code + "), the session starts without its curtain")
-            auth.write(JSON.stringify({ start: true }) + "\n")
+            auth.write(JSON.stringify({ start: true, session: root.session }) + "\n")
             auth.flush()
         }
     }

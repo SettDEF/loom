@@ -110,6 +110,7 @@ impl Loom {
 /// the login backend, the screen kept locked for the handover); dist/greeter/ii.
 const II_GREETER: &str = include_str!("../dist/greeter/ii/greeter.qml");
 const II_LOCK_CONTEXT: &str = include_str!("../dist/greeter/ii/LockContext.qml");
+const II_SESSION_PICKER: &str = include_str!("../dist/greeter/ii/SessionPicker.qml");
 
 /// ii, its config, its generated colours and the user's fonts mirrored into the greeter's home
 /// (rsync: only changes; ii's .git left out), then the greeter's two files put into the copy.
@@ -125,7 +126,7 @@ fn mirror_ii(home: &Path, dir: &Path) {
         }
         let _ = std::fs::create_dir_all(&dst);
         let ok = std::process::Command::new("rsync")
-            .args(["-a", "--delete", "--exclude", ".git", "--exclude", "greeter.qml"])
+            .args(["-a", "--delete", "--exclude", ".git", "--exclude", "greeter.qml", "--exclude", "SessionPicker.qml"])
             .arg(format!("{}/", src.display()))
             .arg(format!("{}/", dst.display()))
             .status()
@@ -144,6 +145,7 @@ fn mirror_ii(home: &Path, dir: &Path) {
     };
     put("modules/common/panels/lock/LockContext.qml", II_LOCK_CONTEXT);
     put("greeter.qml", II_GREETER);
+    put("SessionPicker.qml", II_SESSION_PICKER);
 }
 
 /// `loom --greeter DIR`: this process (and what it starts) sees DIR as its home, the user's cursor,

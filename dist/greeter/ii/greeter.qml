@@ -16,6 +16,19 @@ import qs
 ShellRoot {
     // the wallpaper and its widgets: ii's lock is see-through and blurs what is behind it
     Background {}
-    Lock {}
+    Lock {
+        id: lock
+        // ii's own lock surface, with the desktop picker in its corner
+        lockSurface: Item {
+            LockSurface {
+                anchors.fill: parent
+                context: lock.context
+            }
+            SessionPicker {
+                anchors.fill: parent
+                context: lock.context
+            }
+        }
+    }
     Component.onCompleted: GlobalStates.screenLocked = true
 }
