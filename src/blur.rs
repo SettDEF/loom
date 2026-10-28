@@ -341,6 +341,15 @@ void main() {
     vec2 cell = mod(floor(screen), 64.0);
     bg += (fract(sin(dot(cell, vec2(12.9898, 78.233)) * 0.01) * 437.585) - 0.5) * noise;
     float m = (ignore < 0.0 || color.a > ignore) ? 1.0 : 0.0;
+    // the outer edge's partly covered pixels (a 1 px border at 1.6) got the blurred wallpaper
+    // (xray) as their backdrop over the window really under them: a bright 1 px line round an
+    // opaque panel. An edge pixel (a neighbour 1.5 px away is see-through) keeps what is under it.
+    if (m == 1.0 && color.a < 0.999 && ignore >= 0.0) {
+        vec2 d = 1.5 / elem_size;
+        float n = min(min(texture2D(tex, v_coords + vec2(d.x, 0.0)).a, texture2D(tex, v_coords - vec2(d.x, 0.0)).a),
+                      min(texture2D(tex, v_coords + vec2(0.0, d.y)).a, texture2D(tex, v_coords - vec2(0.0, d.y)).a));
+        if (n <= ignore) m = 0.0;
+    }
     vec4 outc = color + vec4(clamp(bg, 0.0, 1.0), 1.0) * m * (1.0 - color.a);
     if (radius > 0.0) {
         vec2 p = elem_off + v_coords * elem_size;
