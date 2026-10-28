@@ -323,6 +323,15 @@ pub fn run(opts: Options) -> Result<(), Box<dyn std::error::Error>> {
     }
     eprintln!("loom: {} env lines from the Hyprland config", state.binds.env.len());
     state.hypr = Some(crate::hypr_ipc::start(&event_loop.handle())?);
+    // ended programs nobody waits for (from before a restart, Xwayland's): collected every 10 s
+    {
+        use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
+        crate::restart::reap_orphans();
+        let _ = event_loop.handle().insert_source(Timer::from_duration(Duration::from_secs(10)), |_, _, _: &mut Loom| {
+            crate::restart::reap_orphans();
+            TimeoutAction::ToDuration(Duration::from_secs(10))
+        });
+    }
     // loom's night light on hyprsunset's socket (nightlight.rs)
     if let Some(dir) = state.hypr.as_ref().map(|h| h.dir.clone()) {
         if let Err(e) = crate::nightlight::start(&event_loop.handle(), &dir) {

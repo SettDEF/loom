@@ -250,3 +250,23 @@ pub fn restore_workspaces(state: &mut crate::state::Loom) {
         });
     }
 }
+
+/// Programs loom started that have ended but were never waited for: those of a loom before a
+/// `loom restart` (the exec keeps them as children, their handles are gone) and Xwayland's.
+/// Each left a zombie for the rest of the session (14 after a day of restarts, 2026-10-28).
+pub fn reap_orphans() {
+    // Safety: getpid has no preconditions
+    let me = unsafe { libc::getpid() };
+    let Ok(dir) = std::fs::read_dir("/proc") else { return };
+    for e in dir.flatten() {
+        let Some(pid) = e.file_name().to_str().and_then(|n| n.parse::<i32>().ok()) else { continue };
+        let Ok(stat) = std::fs::read_to_string(e.path().join("stat")) else { continue };
+        // "pid (comm) S ppid …": the fields after the last ')'
+        let mut f = stat.rsplit_once(')').map(|(_, r)| r.split_whitespace()).into_iter().flatten();
+        let (state, ppid) = (f.next(), f.next().and_then(|p| p.parse::<i32>().ok()));
+        if state == Some("Z") && ppid == Some(me) {
+            // Safety: a child of ours that has ended; WNOHANG never blocks
+            unsafe { libc::waitpid(pid, std::ptr::null_mut(), libc::WNOHANG) };
+        }
+    }
+}
