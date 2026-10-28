@@ -198,6 +198,7 @@ fn save_workspaces(state: &crate::state::Loom) {
         "shown": state.shown_on,
         "focused": state.output.as_ref().map(|o| o.name()),
         "windows": windows,
+        "night": [state.night.temperature, state.night.gamma],
     });
     let _ = std::fs::write(state_file(), v.to_string());
 }
@@ -212,6 +213,12 @@ pub fn restore_workspaces(state: &mut crate::state::Loom) {
     let Ok(text) = std::fs::read_to_string(state_file()) else { return };
     let _ = std::fs::remove_file(state_file());
     let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else { return };
+    // the night light as it was (loom's own: nightlight.rs)
+    if let Some(n) = v["night"].as_array() {
+        state.night.temperature = n.first().and_then(|t| t.as_u64()).map(|t| t as u32);
+        state.night.gamma = n.get(1).and_then(|g| g.as_u64()).map(|g| g as u32).unwrap_or(100);
+        state.night_apply();
+    }
     for w in v["windows"].as_array().into_iter().flatten() {
         if let (Some(pid), Some(ws)) = (w[0].as_u64(), w[1].as_i64()) {
             // silent: the window goes there without switching the screen to it

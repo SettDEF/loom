@@ -323,6 +323,12 @@ pub fn run(opts: Options) -> Result<(), Box<dyn std::error::Error>> {
     }
     eprintln!("loom: {} env lines from the Hyprland config", state.binds.env.len());
     state.hypr = Some(crate::hypr_ipc::start(&event_loop.handle())?);
+    // loom's night light on hyprsunset's socket (nightlight.rs)
+    if let Some(dir) = state.hypr.as_ref().map(|h| h.dir.clone()) {
+        if let Err(e) = crate::nightlight::start(&event_loop.handle(), &dir) {
+            eprintln!("loom: night light socket: {e}");
+        }
+    }
     match crate::xwayland::start(&event_loop.handle(), &mut state) {
         Ok(n) => {
             state.x_display = Some(n);
@@ -746,8 +752,9 @@ impl Loom {
         };
         let name = output.name();
         self.add_output(output, at.into());
-        // its colour matrix: ours, else none (a night light the other session left on is cleared)
-        let m = self.ctm.get(&name).copied().unwrap_or(IDENTITY);
+        // its colour matrix: ours, else the night light's (none when off: a night light the other
+        // session left on is cleared)
+        let m = self.ctm.get(&name).copied().unwrap_or(self.night.matrix());
         self.set_ctm(&name, m);
         Ok(())
     }

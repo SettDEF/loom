@@ -163,6 +163,8 @@ pub struct Loom {
     pub center_pending: std::collections::HashSet<u64>,
     /// colour matrices per screen (night light), applied again when a screen comes (back)
     pub ctm: std::collections::HashMap<String, [f64; 9]>,
+    /// loom's night light (nightlight.rs): every screen's colour unless a CTM client sets its own
+    pub night: crate::nightlight::Night,
     /// options set at run time by `hyprctl keyword` (getoption answers them)
     pub keywords: std::collections::HashMap<String, String>,
     /// the input devices and their settings (TTY)
@@ -320,6 +322,7 @@ impl Loom {
             shader_conf: crate::config::screen_shader_conf(),
             center_pending: Default::default(),
             ctm: Default::default(),
+            night: Default::default(),
             keywords: Default::default(),
             inputs: Default::default(),
             touch_slots: Vec::new(),

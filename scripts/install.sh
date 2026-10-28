@@ -5,7 +5,8 @@ set -eu
 cd "$(dirname "$0")/.."
 T=${LOOM_BIN:-${CARGO_TARGET_DIR:-/mnt/storage/dev/cargo-target/loom}/release}
 # a build older than the source is not what was just built (a stale target folder): refused
-newest=$(find src Cargo.toml -newer "$T/loom" -type f 2>/dev/null | head -1)
+# only what the loom binary is built from (src/bin/* are other programs; dist/greeter is built in)
+newest=$(find src dist/greeter Cargo.toml -newer "$T/loom" -type f -not -path 'src/bin/*' 2>/dev/null | head -1)
 if [ -n "$newest" ]; then echo "$T/loom is older than $newest: build first (or LOOM_BIN=… for the right folder)" >&2; exit 1; fi
 B=$HOME/.local/bin
 mkdir -p "$B"

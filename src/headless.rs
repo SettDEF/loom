@@ -64,6 +64,12 @@ pub fn run(opts: Options) -> Result<(), Box<dyn std::error::Error>> {
         eprintln!("loom: {} binds from {}", state.binds.binds.len(), p.display());
     }
     state.hypr = Some(crate::hypr_ipc::start(&event_loop.handle())?);
+    // loom's night light on hyprsunset's socket (nightlight.rs)
+    if let Some(dir) = state.hypr.as_ref().map(|h| h.dir.clone()) {
+        if let Err(e) = crate::nightlight::start(&event_loop.handle(), &dir) {
+            eprintln!("loom: night light socket: {e}");
+        }
+    }
     state.headless = true;
     // X programs: the display reserved now, Xwayland started by the first X program
     match crate::xwayland::start(&event_loop.handle(), &mut state) {

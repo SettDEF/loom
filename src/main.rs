@@ -51,6 +51,7 @@ mod xwayland;
 mod xscreens;
 mod greeter;
 mod curtain;
+mod nightlight;
 
 use std::{path::PathBuf, time::Duration};
 

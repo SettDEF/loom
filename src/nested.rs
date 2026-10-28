@@ -64,6 +64,12 @@ pub fn run(socket: Option<String>, run: Vec<String>) -> Result<(), Box<dyn std::
     state.binds = crate::binds::Binds::load(&conf);
     eprintln!("loom: {} binds from {} ({} not handled yet: mouse)", state.binds.binds.len(), conf.display(), state.binds.skipped);
     state.hypr = Some(crate::hypr_ipc::start(&event_loop.handle())?);
+    // loom's night light on hyprsunset's socket (nightlight.rs)
+    if let Some(dir) = state.hypr.as_ref().map(|h| h.dir.clone()) {
+        if let Err(e) = crate::nightlight::start(&event_loop.handle(), &dir) {
+            eprintln!("loom: night light socket: {e}");
+        }
+    }
     // X programs: the display reserved now, Xwayland started by the first X program
     match crate::xwayland::start(&event_loop.handle(), &mut state) {
         Ok(n) => state.x_display = Some(n),

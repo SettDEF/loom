@@ -25,7 +25,8 @@ fi
 for f in loom loom-x loom-auth; do
   [ -x "$T/$f" ] || { echo "no $T/$f: cargo build --release first" >&2; exit 1; }
 done
-newest=$(find src dist Cargo.toml -newer "$T/loom" -type f 2>/dev/null | head -1)
+# only what the loom binary is built from (src/bin/* are other programs; dist/greeter is built in)
+newest=$(find src dist/greeter Cargo.toml -newer "$T/loom" -type f -not -path 'src/bin/*' 2>/dev/null | head -1)
 if [ -n "$newest" ]; then echo "$T/loom is older than $newest: cargo build --release first" >&2; exit 1; fi
 
 echo "loom login screen: installing (needs sudo)"
@@ -33,8 +34,8 @@ echo "loom login screen: installing (needs sudo)"
 for f in loom loom-x loom-auth; do sudo install -m 755 "$T/$f" "/usr/local/bin/$f"; done
 sudo install -m 755 scripts/loom-session /usr/local/bin/loom-session
 sudo install -m 644 dist/pam.d/loom dist/pam.d/loom-greeter -t /etc/pam.d/
-sudo install -m 644 dist/sysusers.d/loom.conf /etc/sysusers.d/loom.conf
-sudo install -m 644 dist/tmpfiles.d/loom.conf /etc/tmpfiles.d/loom.conf
+sudo install -Dm 644 dist/sysusers.d/loom.conf /etc/sysusers.d/loom.conf
+sudo install -Dm 644 dist/tmpfiles.d/loom.conf /etc/tmpfiles.d/loom.conf
 sudo install -m 644 dist/systemd/loom-auth.service dist/systemd/loom-greeter.service -t /etc/systemd/system/
 sudo systemd-sysusers /etc/sysusers.d/loom.conf
 sudo systemd-tmpfiles --create /etc/tmpfiles.d/loom.conf

@@ -221,11 +221,9 @@ impl Dispatch<HyprlandCtmControlManagerV1, ()> for Loom {
             _ => {}
         }
     }
-    // its client gone: the screens back to their own colours, as Hyprland does
+    // its client gone: the screens back to loom's own night light (off: their own colours)
     fn destroyed(state: &mut Self, _: ClientId, _: &HyprlandCtmControlManagerV1, _: &()) {
-        for o in state.outputs.clone() {
-            state.set_ctm(&o.name(), [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]);
-        }
+        state.night_apply();
     }
 }
 
