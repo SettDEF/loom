@@ -17,6 +17,8 @@ pub struct Dev {
 #[derive(Default)]
 pub struct Devices {
     pub all: Vec<Dev>,
+    /// the lights now, for a keyboard plugged in later
+    pub last_leds: smithay::input::keyboard::LedState,
 }
 
 /// Hyprland's name for a device: lower case, spaces as dashes.
@@ -103,6 +105,21 @@ impl Devices {
         let scroll = apply(&mut dev, &settings(lines, &name, touchpad));
         let pointer = dev.has_capability(DeviceCapability::Pointer);
         self.all.push(Dev { dev, name, pointer, touchpad, scroll });
+        let s = self.last_leds;
+        self.leds(s);
+    }
+
+    /// Caps, Num and Scroll Lock lights on every keyboard (libinput sets them; nothing else does)
+    pub fn leds(&mut self, s: smithay::input::keyboard::LedState) {
+        use smithay::reexports::input::Led;
+        self.last_leds = s;
+        let mut l = Led::empty();
+        if s.caps == Some(true) { l |= Led::CAPSLOCK }
+        if s.num == Some(true) { l |= Led::NUMLOCK }
+        if s.scroll == Some(true) { l |= Led::SCROLLLOCK }
+        for p in &mut self.all {
+            if p.dev.has_capability(DeviceCapability::Keyboard) { p.dev.led_update(l) }
+        }
     }
 
     pub fn removed(&mut self, dev: &Device) {

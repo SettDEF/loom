@@ -824,6 +824,9 @@ impl SeatHandler for Loom {
         self.cursor_status = image;
         self.dirty = true;
     }
+    fn led_state_changed(&mut self, _seat: &Seat<Self>, led_state: smithay::input::keyboard::LedState) {
+        self.inputs.leds(led_state);
+    }
     fn focus_changed(&mut self, seat: &Seat<Self>, focused: Option<&crate::focus::KbFocus>) {
         // LOOM_FOCUS_TRACE: every keyboard focus change (debugging)
         if std::env::var_os("LOOM_FOCUS_TRACE").is_some() {
