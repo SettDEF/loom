@@ -1,0 +1,12 @@
+#!/bin/sh
+# qs-timed: quickshell with every output line stamped in ms since the process started, to see
+# where a config's load time goes (quickshell's own logger has no time on its lines).
+# Usage: QS_REAL=path/to/quickshell scripts/qs-timed -p CONFIG      (with run-ii.sh: QS_BIN=scripts/qs-timed)
+#        QS_EXTRA_ARGS="--debug 45555 --waitfordebug": more quickshell options (a profiler attaching)
+exec python3 -u -c '
+import subprocess, sys, time
+t = time.monotonic()
+p = subprocess.Popen(sys.argv[1:], stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+for line in p.stdout:
+    sys.stdout.write("%6d %s" % ((time.monotonic() - t) * 1000, line.decode(errors="replace")))
+' "${QS_REAL:-quickshell}" ${QS_EXTRA_ARGS:-} "$@"

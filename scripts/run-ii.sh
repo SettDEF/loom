@@ -7,6 +7,7 @@
 # config and data as throwaway overlays (it reads the real files, its writes vanish), state and cache read the same way.
 #
 # Usage: scripts/run-ii.sh [seconds=25] [out.png] [loom-binary]   (LOOM_GPU=1: the GPU renderer, for blur and rounding)
+#   QS_BIN=path: that quickshell build instead of the installed qs
 #   LOOM_EXTRA="kitty …": a program started next to the shell; LOOM_ARGS: more loom options (--keys …); LOOM_SIZE=WxH[,WxH]: the screens
 set -eu
 SECS=${1:-25}
@@ -40,7 +41,7 @@ bwrap --ro-bind / / --dev /dev --proc /proc --tmpfs /tmp --dir /tmp/.X11-unix \
   --unsetenv HYPRLAND_INSTANCE_SIGNATURE --unsetenv ZEIT --unsetenv ZEIT_PANE \
   --setenv LIBGL_ALWAYS_SOFTWARE "$SOFT" --setenv LOOM_BLUR "${LOOM_BLUR:-1}" ${LOOM_FOCUS_TRACE:+--setenv LOOM_FOCUS_TRACE 1} \
   "$L" --headless $GPU ${LOOM_ARGS:-} --size ${LOOM_SIZE:-1536x960} --wait "$((SECS * 1000))" --snapshot /tmp/out/shot.png \
-  -- dbus-run-session -- sh -c "QT_QPA_PLATFORM=wayland qs -p $HOME/.config/quickshell/ii > /tmp/out/qs.log 2>&1 & sleep 5; ${LOOM_EXTRA:-wait}" \
+  -- dbus-run-session -- sh -c "QT_QPA_PLATFORM=wayland ${QS_BIN:-qs} -p $HOME/.config/quickshell/ii > /tmp/out/qs.log 2>&1 & sleep 5; ${LOOM_EXTRA:-wait}" \
   > "$T/out/loom.log" 2>&1 || true
 
 /usr/bin/cp -f "$T/out/shot.png" "$OUT" 2>/dev/null && echo "shot: $OUT"
