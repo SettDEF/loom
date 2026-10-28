@@ -170,6 +170,34 @@ impl Loom {
         (x, y).into()
     }
 
+    /// A second after it opens, a window 1px narrower and back: Bitwig switches its UI scale while
+    /// starting and repaints only part of the window, the rest stays at the first scale; a resize
+    /// (a drag, in Hyprland) repaints it all
+    fn x_nudge(&mut self, x: X11Surface) {
+        let Some(h) = self.loop_handle.clone() else { return };
+        use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
+        let _ = h.insert_source(Timer::from_duration(std::time::Duration::from_secs(1)), move |_, _, s: &mut Loom| {
+            if !smithay::utils::IsAlive::alive(&x) || s.x_window(&x).is_none() {
+                return TimeoutAction::Drop;
+            }
+            let was = x.geometry();
+            let mut g = was;
+            g.size.w -= 1;
+            let _ = x.configure(g);
+            let (x2, h2) = (x.clone(), s.loop_handle.clone());
+            if let Some(h2) = h2 {
+                let _ = h2.insert_source(Timer::from_duration(std::time::Duration::from_millis(100)), move |_, _, _: &mut Loom| {
+                    // back, unless loom placed it anew meanwhile
+                    if x2.geometry() == g {
+                        let _ = x2.configure(was);
+                    }
+                    TimeoutAction::Drop
+                });
+            }
+            TimeoutAction::Drop
+        });
+    }
+
     fn x_window(&self, x: &X11Surface) -> Option<Window> {
         self.space.elements().find(|w| w.x11_surface() == Some(x)).cloned().or_else(|| self.managed.iter().find(|m| m.window.x11_surface() == Some(x)).map(|m| m.window.clone()))
     }
@@ -223,6 +251,7 @@ impl XwmHandler for Loom {
         // shown once in place: a program that scales per screen (Bitwig) draws its first frame
         // at its tile, not at the size and screen it asked for and then half-repainted
         let _ = x.set_mapped(true);
+        self.x_nudge(x);
     }
     fn mapped_override_redirect_window(&mut self, _xwm: XwmId, x: X11Surface) {
         // loom's own drag stand-in is no window to show
