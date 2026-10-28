@@ -383,7 +383,11 @@ impl Loom {
                     self.dirty = true;
                 }
             }
-            "fullscreen" | "fullscreenstate" => self.toggle_fullscreen(),
+            // "fullscreen 1" (Hyprland's maximize, the overview menu's and Super+D) and fullscreenstate maximize in the
+            // layout; "fullscreen" / "fullscreen 0" cover the screen
+            "fullscreen" if a.trim() == "1" => { if let Some(w) = self.focused.clone() { self.toggle_maximize(&w); self.relayout() } }
+            "fullscreenstate" => { if let Some(w) = self.focused.clone() { self.toggle_maximize(&w); self.relayout() } }
+            "fullscreen" => self.toggle_fullscreen(),
             "movewindow" => self.move_window(a),
             "pin" => self.toggle_pin(),
             "resizeactive" => self.resize_active(a),

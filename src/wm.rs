@@ -475,11 +475,23 @@ impl Loom {
         if on == (self.fullscreen.as_ref() == Some(w)) {
             return;
         }
+        // the one fullscreen before (another window): really out of fullscreen first, or it kept the state and the
+        // whole screen's size while loom treated it as an ordinary window (a floating one then sat behind the layout)
         if on {
+            if let Some(old) = self.fullscreen.clone().filter(|o| o != w) {
+                self.leave_fullscreen(&old);
+            }
+            if let Some(m) = self.managed_of(w).filter(|m| m.floating) {
+                let addr = m.addr;
+                if let Some(g) = self.space.element_geometry(w) {
+                    self.full_restore.insert(addr, g);
+                }
+            }
             self.fullscreen = Some(w.clone());
             self.focus_window(w);
         } else {
             self.fullscreen = None;
+            self.leave_fullscreen(w);
         }
         self.hypr_event(&format!("fullscreen>>{}", u8::from(on)));
         self.foreign_all_changed();
@@ -778,6 +790,42 @@ impl Loom {
         let Some(ws) = self.managed_of(&full).map(|m| m.ws) else { return };
         if self.shown_on.values().any(|w| *w == ws) {
             self.space.raise_element(&full, false);
+        }
+    }
+}
+
+impl Loom {
+    /// `w` told it is no longer fullscreen; a floating one gets its place and size from before back (a tiled one
+    /// is laid out again by relayout)
+    /// a floating window back at the place and size it had before it was maximized or fullscreen
+    pub fn float_restore(&mut self, w: &Window) {
+        let Some(addr) = self.managed_of(w).map(|m| m.addr) else { return };
+        let Some(g) = self.full_restore.remove(&addr) else { return };
+        if let Some(t) = w.toplevel() { t.with_pending_state(|s| s.size = Some(g.size)); if t.is_initial_configure_sent() { t.send_pending_configure(); } } else if let Some(x) = w.x11_surface() { let _ = x.configure(g); }
+        self.space.map_element(w.clone(), g.loc, true);
+    }
+
+    pub fn leave_fullscreen(&mut self, w: &Window) {
+        let Some((addr, floating)) = self.managed_of(w).map(|m| (m.addr, m.floating)) else { return };
+        let back = if floating { self.full_restore.remove(&addr) } else { None };
+        if let Some(t) = w.toplevel() {
+            t.with_pending_state(|s| {
+                s.states.unset(smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State::Fullscreen);
+                if let Some(g) = back {
+                    s.size = Some(g.size);
+                }
+            });
+            if t.is_initial_configure_sent() {
+                t.send_pending_configure();
+            }
+        } else if let Some(x) = w.x11_surface() {
+            let _ = x.set_fullscreen(false);
+            if let Some(g) = back {
+                let _ = x.configure(g);
+            }
+        }
+        if let Some(g) = back {
+            self.space.map_element(w.clone(), g.loc, true);
         }
     }
 }

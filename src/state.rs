@@ -119,6 +119,8 @@ pub struct Loom {
     pub globals_held: Vec<(crate::hypr_proto::Held, String)>,
     /// the fullscreen window, if one is
     pub fullscreen: Option<Window>,
+    /// a floating window's place and size before it went fullscreen, by address: given back when it leaves
+    pub full_restore: std::collections::HashMap<u64, smithay::utils::Rectangle<i32, smithay::utils::Logical>>,
     /// the repeating bind held (its key, its actions), its timer's generation; the event loop
     pub repeat: Option<(u32, Vec<String>)>,
     pub repeat_gen: u64,
@@ -297,6 +299,7 @@ impl Loom {
             bind_actions: Vec::new(),
             globals_held: Vec::new(),
             fullscreen: None,
+            full_restore: Default::default(),
             repeat: None,
             repeat_gen: 0,
             loop_handle: None,

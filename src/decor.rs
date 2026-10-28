@@ -614,7 +614,24 @@ impl crate::state::Loom {
 
     /// Maximized (the whole tiling area, over the others) or back into the tiling.
     pub fn toggle_maximize(&mut self, w: &smithay::desktop::Window) {
+        // a floating window maximized fills its screen's area (the layout only sizes tiled ones), and gets its
+        // place and size back after
+        let was = self.maximized.clone();
         self.maximized = if self.maximized.as_ref() == Some(w) { None } else { Some(w.clone()) };
+        if let Some(old) = was.filter(|o| self.managed_of(o).is_some_and(|m| m.floating)) {
+            self.float_restore(&old);
+        }
+        if self.maximized.as_ref() == Some(w) && self.managed_of(w).is_some_and(|m| m.floating) {
+            let addr = self.managed_of(w).map(|m| m.addr).unwrap_or(0);
+            let area = self.space.outputs_for_element(w).first().cloned().or_else(|| self.outputs.first().cloned()).and_then(|o| self.area_of(&o));
+            if let (Some(g), Some(a)) = (self.space.element_geometry(w), area) {
+                self.full_restore.insert(addr, g);
+                let gap = self.look.gaps_out.round() as i32;
+                let r = smithay::utils::Rectangle::new((a.loc.x + gap, a.loc.y + gap).into(), ((a.size.w - 2 * gap).max(1), (a.size.h - 2 * gap).max(1)).into());
+                if let Some(t) = w.toplevel() { t.with_pending_state(|s| s.size = Some(r.size)); if t.is_initial_configure_sent() { t.send_pending_configure(); } } else if let Some(x) = w.x11_surface() { let _ = x.configure(r); }
+                self.space.map_element(w.clone(), r.loc, true);
+            }
+        }
         self.relayout();
         let on = self.maximized.as_ref() == Some(w);
         self.fx_event("windowMaximizedStateChanged", w, &[on.into(), on.into()]);

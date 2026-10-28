@@ -207,7 +207,10 @@ pub fn translate(src: &str) -> Option<Vec<String>> {
             _ => vec!["resizewindow".into()],
         },
         "window.pin" => vec!["pin".into()],
-        "window.fullscreen" | "window.fullscreen_state" => vec!["fullscreen".into()],
+        // the mode matters: "maximized" (and fullscreen_state, the client told only) maximizes in the layout, as
+        // Hyprland's fullscreen 1; only "fullscreen" covers the screen. Both were real fullscreen before.
+        "window.fullscreen" => vec![if field(&args, "mode").map(|m| m.text()).as_deref() == Some("maximized") { "fullscreen 1".into() } else { "fullscreen".into() }],
+        "window.fullscreen_state" => vec!["fullscreen 1".into()],
         "window.cycle_next" => vec![if first(&args).is_some_and(|a| a.contains("prev")) { "cyclenext prev".into() } else { "cyclenext".into() }],
         "window.bring_to_top" => vec!["bringactivetotop".into()],
         "workspace.toggle_special" => vec!["togglespecialworkspace".into()],
