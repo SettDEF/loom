@@ -313,6 +313,7 @@ impl Loom {
             }
             self.relayout();
         }
+        self.x_screens_check();
     }
 
     /// A window by Hyprland's selectors: `address:0x…`, `class:REGEX`, `title:REGEX`, `pid:N`,

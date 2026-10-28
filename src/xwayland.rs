@@ -41,6 +41,8 @@ pub struct XState {
     pub layout: Option<std::sync::Arc<crate::xscreens::XLayout>>,
     /// each X window's last minimum size: a nudge only when it changes, not when it is sent again
     pub min_sizes: std::collections::HashMap<u32, Option<smithay::utils::Size<i32, Logical>>>,
+    /// the screen each X window was last on: a program that scales per screen repaints on a change
+    pub screens: std::collections::HashMap<u32, String>,
 }
 
 /// Reserves a free X display (`display` to keep the same one) and watches it; returns its number.
@@ -201,6 +203,30 @@ impl Loom {
         });
     }
 
+    /// After windows moved (a layout, a drag): an X window now on another screen gets the nudge.
+    /// A program that sizes its UI per screen (Java, Qt, Electron under X) switches scale there
+    /// and may repaint only part of the window
+    pub fn x_screens_check(&mut self) {
+        let mut moved = vec![];
+        for w in self.space.elements() {
+            let Some(x) = w.x11_surface() else { continue };
+            if x.is_override_redirect() || self.managed_of(w).is_none() {
+                continue;
+            }
+            let Some(g) = self.space.element_geometry(w) else { continue };
+            let mid = (g.loc.x + g.size.w / 2, g.loc.y + g.size.h / 2);
+            let Some(o) = self.outputs.iter().find(|o| self.space.output_geometry(o).is_some_and(|og| og.contains(mid))) else { continue };
+            if let Some(before) = self.x.screens.insert(x.window_id(), o.name()) {
+                if before != o.name() {
+                    moved.push(x.clone());
+                }
+            }
+        }
+        for x in moved {
+            self.x_nudge(x, std::time::Duration::from_millis(300));
+        }
+    }
+
     fn x_window(&self, x: &X11Surface) -> Option<Window> {
         self.space.elements().find(|w| w.x11_surface() == Some(x)).cloned().or_else(|| self.managed.iter().find(|m| m.window.x11_surface() == Some(x)).map(|m| m.window.clone()))
     }
@@ -208,6 +234,7 @@ impl Loom {
     /// An X window gone (unmapped or destroyed): off the screen, out of the managed ones.
     fn x_gone(&mut self, x: &X11Surface) {
         self.x.min_sizes.remove(&x.window_id());
+        self.x.screens.remove(&x.window_id());
         let Some(w) = self.x_window(x) else { return };
         if self.managed_of(&w).is_some() {
             self.unmanage(&w);

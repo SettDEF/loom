@@ -176,6 +176,7 @@ impl Loom {
         self.x_sync_stacking();
         self.x_scales();
         self.dirty = true;
+        self.x_screens_check();
     }
 
     /// One workspace's tiled windows in `area`; `raise` puts them on top (the special one).
