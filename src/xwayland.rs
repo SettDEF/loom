@@ -39,6 +39,8 @@ pub struct XState {
     pub zero_scaling: bool,
     /// where X sees the screens (xscreens.rs); None without force_zero_scaling
     pub layout: Option<std::sync::Arc<crate::xscreens::XLayout>>,
+    /// each X window's last minimum size: a nudge only when it changes, not when it is sent again
+    pub min_sizes: std::collections::HashMap<u32, Option<smithay::utils::Size<i32, Logical>>>,
 }
 
 /// Reserves a free X display (`display` to keep the same one) and watches it; returns its number.
@@ -170,13 +172,14 @@ impl Loom {
         (x, y).into()
     }
 
-    /// A second after it opens, a window 1px narrower and back: Bitwig switches its UI scale while
+    /// A window 1px narrower and back, a second after it opens and after its size limits change
+    /// (Bitwig's follow its UI scale, which it switches while loading): Bitwig switches its UI scale while
     /// starting and repaints only part of the window, the rest stays at the first scale; a resize
     /// (a drag, in Hyprland) repaints it all
-    fn x_nudge(&mut self, x: X11Surface) {
+    fn x_nudge(&mut self, x: X11Surface, after: std::time::Duration) {
         let Some(h) = self.loop_handle.clone() else { return };
         use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
-        let _ = h.insert_source(Timer::from_duration(std::time::Duration::from_secs(1)), move |_, _, s: &mut Loom| {
+        let _ = h.insert_source(Timer::from_duration(after), move |_, _, s: &mut Loom| {
             if !smithay::utils::IsAlive::alive(&x) || s.x_window(&x).is_none() {
                 return TimeoutAction::Drop;
             }
@@ -204,6 +207,7 @@ impl Loom {
 
     /// An X window gone (unmapped or destroyed): off the screen, out of the managed ones.
     fn x_gone(&mut self, x: &X11Surface) {
+        self.x.min_sizes.remove(&x.window_id());
         let Some(w) = self.x_window(x) else { return };
         if self.managed_of(&w).is_some() {
             self.unmanage(&w);
@@ -253,7 +257,8 @@ impl XwmHandler for Loom {
         // shown once in place: a program that scales per screen (Bitwig) draws its first frame
         // at its tile, not at the size and screen it asked for and then half-repainted
         let _ = x.set_mapped(true);
-        self.x_nudge(x);
+        self.x.min_sizes.insert(x.window_id(), x.min_size());
+        self.x_nudge(x, std::time::Duration::from_secs(1));
     }
     fn mapped_override_redirect_window(&mut self, _xwm: XwmId, x: X11Surface) {
         // loom's own drag stand-in is no window to show
@@ -334,6 +339,14 @@ impl XwmHandler for Loom {
                 }
                 self.space.map_element(w, loc, true);
                 self.relayout();
+            }
+            // new size limits on a window loom keeps: a program that changed its UI scale (Bitwig)
+            P::NormalHints => {
+                let min = x.min_size();
+                let before = self.x.min_sizes.insert(x.window_id(), min);
+                if before.is_some_and(|b| b != min) && self.x_window(&x).is_some_and(|w| self.managed_of(&w).is_some()) {
+                    self.x_nudge(x, std::time::Duration::from_millis(300));
+                }
             }
             _ => {}
         }
