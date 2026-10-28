@@ -409,23 +409,37 @@ pub trait XMap: Send + Sync + std::fmt::Debug {
 pub(crate) struct XCoords {
     scale: Arc<AtomicF64>,
     map: Arc<std::sync::RwLock<Option<Arc<dyn XMap>>>>,
+    /// loom: this window's X pixels are logical pixels (drawn at scale 1, so the screen's scale
+    /// enlarges it); its place still follows the map. Per window: each surface gets its own
+    pub(crate) lift: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl XCoords {
     pub(crate) fn to_x(&self, r: Rectangle<i32, Logical>) -> Rectangle<i32, Client> {
         match &*self.map.read().unwrap() {
             Some(m) => {
-                let r = m.to_x(r);
-                Rectangle::new((r.loc.x, r.loc.y).into(), (r.size.w, r.size.h).into())
+                let x = m.to_x(r);
+                let size = if self.lifted() { (r.size.w, r.size.h) } else { (x.size.w, x.size.h) };
+                Rectangle::new((x.loc.x, x.loc.y).into(), size.into())
             }
             None => r.to_client_precise_round(self.scale.load(Ordering::Acquire)),
         }
     }
     pub(crate) fn from_x(&self, r: Rectangle<i32, Client>) -> Rectangle<i32, Logical> {
         match &*self.map.read().unwrap() {
-            Some(m) => m.from_x(Rectangle::new((r.loc.x, r.loc.y).into(), (r.size.w, r.size.h).into())),
+            Some(m) => {
+                let l = m.from_x(Rectangle::new((r.loc.x, r.loc.y).into(), (r.size.w, r.size.h).into()));
+                if self.lifted() { Rectangle::new(l.loc, (r.size.w, r.size.h).into()) } else { l }
+            }
             None => r.to_f64().to_logical(self.scale.load(Ordering::Acquire)).to_i32_round(),
         }
+    }
+    fn lifted(&self) -> bool {
+        self.lift.load(Ordering::Relaxed)
+    }
+    /// the same map and scale, its own lift (for one window)
+    pub(crate) fn for_window(&self) -> Self {
+        XCoords { scale: self.scale.clone(), map: self.map.clone(), lift: Default::default() }
     }
     /// an X size (size hints) for a window at `at`
     pub(crate) fn size_from_x(&self, s: Size<i32, Client>, at: Rectangle<i32, Logical>) -> Size<i32, Logical> {
@@ -913,7 +927,7 @@ impl X11Wm {
         let source = X11Source::new(Arc::clone(&conn), win, atoms._SMITHAY_CLOSE_CONNECTION);
 
         let client_data = client.get_data::<XWaylandClientData>().unwrap();
-        let coords = XCoords { scale: client_data.compositor_state.clone_client_scale(), map: Default::default() };
+        let coords = XCoords { scale: client_data.compositor_state.clone_client_scale(), map: Default::default(), lift: Default::default() };
 
         // We need this for the commit hook.
         client_data.user_data().insert_if_missing(|| id);
@@ -1624,12 +1638,13 @@ where
                 // loom: the request in X pixels made whole from the window's current place, then mapped
                 let mask = u16::from(r.value_mask);
                 let has = |f: ConfigWindow| mask & u16::from(f) != 0;
-                let cur = xwm.coords.to_x(surface.geometry());
+                let coords = surface.coords.clone().unwrap_or_else(|| xwm.coords.clone());
+                let cur = coords.to_x(surface.geometry());
                 let want = Rectangle::<i32, Client>::new(
                     (if has(ConfigWindow::X) { r.x as i32 } else { cur.loc.x }, if has(ConfigWindow::Y) { r.y as i32 } else { cur.loc.y }).into(),
                     (if has(ConfigWindow::WIDTH) { r.width as i32 } else { cur.size.w }, if has(ConfigWindow::HEIGHT) { r.height as i32 } else { cur.size.h }).into(),
                 );
-                let want = xwm.coords.from_x(want);
+                let want = coords.from_x(want);
 
                 // Pass the request to downstream to decide
                 state.configure_request(

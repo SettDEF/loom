@@ -162,11 +162,20 @@ impl Clone for OutputUserData {
 
 impl Inner {
     fn send_geometry_to(&self, output: &WlOutput) {
+        // loom: X at the screens' real pixels: a size that gives 96 dpi times the screen's scale,
+        // so an X program that sizes its UI by the dpi (Bitwig's "Auto") picks the screen's scale
+        let (mw, mh) = match self.x_rect.filter(|_| xdg::is_x(output)) {
+            Some(r) => {
+                let dpi = 96.0 * self.scale.fractional_scale();
+                (((r.size.w as f64 / dpi) * 25.4).round() as i32, ((r.size.h as f64 / dpi) * 25.4).round() as i32)
+            }
+            None => (self.physical.size.w, self.physical.size.h),
+        };
         output.geometry(
             self.location.x,
             self.location.y,
-            self.physical.size.w,
-            self.physical.size.h,
+            mw,
+            mh,
             self.physical.subpixel.into(),
             self.physical.make.clone(),
             self.physical.model.clone(),
@@ -267,6 +276,7 @@ impl Output {
             xdg.set_x_rect(r);
         }
         for output in inner.instances.iter().filter_map(|o| o.upgrade().ok()).filter(xdg::is_x) {
+            inner.send_geometry_to(&output);
             if output.version() >= 2 {
                 if r.is_some() {
                     output.scale(1);

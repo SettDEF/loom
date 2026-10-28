@@ -158,6 +158,12 @@ fn fixed_size(x: &X11Surface) -> bool {
     matches!((x.min_size(), x.max_size()), (Some(a), Some(b)) if a == b && a.w > 0 && a.h > 0)
 }
 
+/// A plugin's editor window: an ordinary window with a title ("Track / Plugin" in Bitwig) that
+/// names its parent and has one size; a DAW's menus have no title.
+fn plugin_like(x: &X11Surface) -> bool {
+    x.is_transient_for().is_some() && fixed_size(x) && !x.title().is_empty() && matches!(x.window_type(), None | Some(WmWindowType::Normal | WmWindowType::Dialog))
+}
+
 fn floats(x: &X11Surface) -> bool {
     fixed_size(x) || x.is_transient_for().is_some() || matches!(x.window_type(), Some(WmWindowType::Dialog | WmWindowType::Utility | WmWindowType::Splash | WmWindowType::Toolbar))
 }
@@ -227,6 +233,12 @@ impl Loom {
         }
     }
 
+    /// The size `x` has in X pixels (now lifted, read from its size hints, which say it in X
+    /// pixels and so read 1:1).
+    fn x_px_size(&self, x: &X11Surface, was: Rectangle<i32, Logical>) -> smithay::utils::Size<i32, Logical> {
+        x.max_size().filter(|s| s.w > 0).unwrap_or_else(|| was.size.to_f64().upscale(self.x_scale_at(was)).to_i32_round())
+    }
+
     fn x_window(&self, x: &X11Surface) -> Option<Window> {
         self.space.elements().find(|w| w.x11_surface() == Some(x)).cloned().or_else(|| self.managed.iter().find(|m| m.window.x11_surface() == Some(x)).map(|m| m.window.clone()))
     }
@@ -263,6 +275,15 @@ impl XwmHandler for Loom {
     fn new_override_redirect_window(&mut self, _xwm: XwmId, _window: X11Surface) {}
 
     fn map_window_request(&mut self, _xwm: XwmId, x: X11Surface) {
+        // a plugin's window (a DAW's VST: named parent, one size, no menu): its X pixels are
+        // logical pixels, so the screen's scale enlarges it; at the screen's real pixels it was
+        // tiny on a 1.6 screen, and a plugin cannot scale itself
+        if self.x.zero_scaling && plugin_like(&x) {
+            let px = x.geometry();
+            x.set_lifted(true);
+            // its size in X pixels as logical pixels, from the place it had
+            let _ = x.configure(Rectangle::new(px.loc, self.x_px_size(&x, px)));
+        }
         let float = floats(&x);
         let w = Window::new_x11_window(x.clone());
         if float {

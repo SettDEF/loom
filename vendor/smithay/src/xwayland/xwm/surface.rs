@@ -41,7 +41,7 @@ use super::{send_configure_notify, X11Wm, XwmId};
 #[derive(Debug, Clone)]
 pub struct X11Surface {
     xwm: Option<XwmId>,
-    coords: Option<super::XCoords>,
+    pub(crate) coords: Option<super::XCoords>,
     window: X11Window,
     conn: Weak<RustConnection>,
     atoms: super::Atoms,
@@ -168,7 +168,7 @@ impl X11Surface {
     ) -> X11Surface {
         X11Surface {
             xwm: xwm.map(|wm| wm.id),
-            coords: xwm.map(|wm| wm.coords.clone()),
+            coords: xwm.map(|wm| wm.coords.for_window()),
             window,
             conn,
             atoms,
@@ -396,6 +396,19 @@ impl X11Surface {
     }
 
     /// Returns the suggested minimum size of the underlying X11 window
+    /// loom: this window's X pixels taken as logical pixels (drawn at scale 1, enlarged by the
+    /// screen's scale), for a program that cannot scale itself (a plugin's window)
+    pub fn set_lifted(&self, on: bool) {
+        if let Some(c) = &self.coords {
+            c.lift.store(on, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
+    /// loom: see [`X11Surface::set_lifted`]
+    pub fn is_lifted(&self) -> bool {
+        self.coords.as_ref().is_some_and(|c| c.lift.load(std::sync::atomic::Ordering::Relaxed))
+    }
+
     pub fn min_size(&self) -> Option<Size<i32, Logical>> {
         let state = self.state.lock().unwrap();
         let at = state.geometry;

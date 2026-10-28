@@ -135,7 +135,8 @@ impl Loom {
         }
         for x in self.space.elements().filter_map(|w| w.x11_surface()) {
             let Some(s) = x.wl_surface() else { continue };
-            let scale = self.x_scale_at(x.geometry());
+            // a lifted one (a plugin's window) at 1: the screen's scale enlarges it
+            let scale = if x.is_lifted() { 1.0 } else { self.x_scale_at(x.geometry()) };
             if (smithay::wayland::compositor::surface_scale(&s, 0.0) - scale).abs() > 1e-6 {
                 smithay::wayland::compositor::set_surface_scale(&s, Some(scale));
             }
