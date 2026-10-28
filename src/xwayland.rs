@@ -239,7 +239,9 @@ impl XwmHandler for Loom {
             // put itself; others centred on the screen, at the size they asked for. Centred, Bitwig's
             // dropdowns opened far from their box
             let size = x.geometry().size;
-            let screen = self.output.as_ref().and_then(|o| self.space.output_geometry(o)).unwrap_or_default();
+            // centred over its parent when that is shown (Bitwig's plugin windows), else on the focused screen
+            let parent = x.is_transient_for().and_then(|p| self.space.elements().find(|w| w.x11_surface().is_some_and(|x| x.window_id() == p)).cloned());
+            let screen = parent.and_then(|p| self.space.element_geometry(&p)).or_else(|| self.output.as_ref().and_then(|o| self.space.output_geometry(o))).unwrap_or_default();
             let own = x.geometry().loc;
             let loc = if x_menu_like(&x) && (own.x != 0 || own.y != 0) { (own.x, own.y) } else { (screen.loc.x + (screen.size.w - size.w) / 2, screen.loc.y + (screen.size.h - size.h) / 2) };
             let loc = self.x_inside(loc.into(), size);

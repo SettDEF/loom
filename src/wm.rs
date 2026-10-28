@@ -58,7 +58,12 @@ impl Loom {
         };
         // started with `exec [workspace N silent]`: its window goes there (by its process or a parent)
         let ruled = self.exec_rule_for(pid);
-        let ws = ruled.map(|r| r.0).unwrap_or(self.active_ws);
+        // an X dialog or plugin window: its parent's workspace (opened while the focus was on the
+        // other screen, it went there and was drawn here, where loom had no place for it); a
+        // floating one elsewhere: the workspace of the screen it is put on
+        let parent_ws = window.x11_surface().and_then(|x| x.is_transient_for()).and_then(|p| self.managed.iter().find(|m| m.window.x11_surface().is_some_and(|x| x.window_id() == p)).map(|m| m.ws));
+        let screen_ws = float_at.and_then(|at| self.outputs.iter().find(|o| self.space.output_geometry(o).is_some_and(|g| g.contains(at))).and_then(|o| self.shown_on.get(&o.name()).copied()));
+        let ws = ruled.map(|r| r.0).or(parent_ws).or(screen_ws).unwrap_or(self.active_ws);
         if ws != self.active_ws && !ruled.is_some_and(|r| r.1) {
             self.switch_workspace(ws);
         }
