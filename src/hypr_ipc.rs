@@ -414,7 +414,11 @@ impl Loom {
                     self.debug_cursor = !self.debug_cursor;
                     return format!("cursor log {}", if self.debug_cursor { "on" } else { "off" });
                 }
-                _ => return "loomdebug cursor".into(),
+                "clicks" => {
+                    self.debug_clicks = !self.debug_clicks;
+                    return format!("click log {}", if self.debug_clicks { "on" } else { "off" });
+                }
+                _ => return "loomdebug cursor | clicks".into(),
             },
             // loom's own: the new binary in place, the session kept (restart.rs)
             "loomrestart" => {

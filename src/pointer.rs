@@ -134,11 +134,28 @@ impl Loom {
                 }
             }
         }
+        // hyprctl dispatch loomdebug clicks: where, over what, who takes it (a title bar that "did not drag")
+        if self.debug_clicks {
+            let decor = self.decor_at(self.pointer_at).map(|(w, hit)| format!("bar of {} ({})", self.class_of(&w), hit.unwrap_or_else(|| "bar".into())));
+            let under = self.surface_at(self.pointer_at).map(|(sf, _)| {
+                let layer = self.layer_output_of(&sf).map(|(_, l)| format!("layer {}", l.namespace()));
+                let win = self.space.elements().find(|w| smithay::wayland::seat::WaylandFocus::wl_surface(*w).as_deref() == Some(&sf)).map(|w| format!("window {}", self.class_of(w)));
+                layer.or(win).unwrap_or_else(|| "a sub-surface or popup".into())
+            });
+            eprintln!(
+                "loom: click {} {:#x} at {:.0},{:.0}: decor {:?}, under {:?}, bind consumed {}, drag {}",
+                if pressed { "press" } else { "release" }, button, self.pointer_at.x, self.pointer_at.y,
+                decor, under, consume, self.drag.is_some()
+            );
+        }
         if consume {
             return;
         }
         // a title bar or button pill (ii-decor) takes the click before the program under it
         if self.decor_button(pressed, button, time) {
+            if self.debug_clicks {
+                eprintln!("loom: click taken by the title bar (drag now {})", self.drag.is_some());
+            }
             return;
         }
         // a press: on a layer that takes the keyboard (the launcher's field), it gets it; on a

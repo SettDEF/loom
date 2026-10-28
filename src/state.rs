@@ -209,6 +209,8 @@ pub struct Loom {
     pub restart_pending: bool,
     /// hyprctl dispatch loomdebug cursor: cursor changes logged
     pub debug_cursor: bool,
+    /// hyprctl dispatch loomdebug clicks: each press and release, what is under it, who took it
+    pub debug_clicks: bool,
     /// the login screen's last picture over a session just started (--curtain DIR; curtain.rs)
     pub curtain: Option<crate::curtain::Curtain>,
     /// drag and drop into X programs (XDND), connected at the first such drag
@@ -354,6 +356,7 @@ impl Loom {
             restart: false,
             restart_pending: false,
             debug_cursor: false,
+            debug_clicks: false,
             curtain: std::env::var_os("LOOM_CURTAIN").map(|d| crate::curtain::Curtain::new(d.into())),
             xdnd: None,
             own_x: Default::default(),
