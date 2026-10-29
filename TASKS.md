@@ -116,7 +116,7 @@ The milestones of [PLAN.md](PLAN.md), each step a line; ticked when it works wit
 - [x] night light: hyprland-ctm-control (hyprsunset) to the CRTC's CTM property, cleared when its client goes, kept across VT switches
 - [ ] input method
 - [ ] tiled windows resize: resizeactive does nothing on a tiled window (wm.rs resize_active), Super+right-drag only moves mwfact sideways (no vertical for tilebottom/tiletop, wrong way for the window right of the master / tileleft), fair and max have nothing to resize
-- [ ] YouTube video freezes in fullscreen (reported 2026-10-27; no error in the session log): suspect vrr,2 turning adaptive sync on, or direct scanout of the video; try with vrr,0
+- [x] YouTube/Twitch video froze in fullscreen (sound on): frame callbacks owed per screen (one flag for all was cleared by the AOC's refresh; zen got 0 callbacks after 2 s of fullscreen). Fixed 230945b, measured on the real screen: 171-179 callbacks/s, 66-117 buffers/s. `hyprctl dispatch loomdebug stats` shows per-second counts
 
 ## 6. Looks
 
