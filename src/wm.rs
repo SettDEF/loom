@@ -469,6 +469,26 @@ impl Loom {
 
     /// cyclenext / cyclenext prev: the next window on the workspace, round.
     pub fn cycle_focus(&mut self, forward: bool) {
+        // center: the keys turn the tiles round, the next one into the middle (Awesome's way; only
+        // the focus moved, behind the master, and the windows never changed place)
+        if self.layouts.of(&self.active_ws.to_string()).suit == "center" {
+            let ws = self.active_ws;
+            let slots: Vec<usize> = self.managed.iter().enumerate().filter(|(_, m)| m.ws == ws && !m.floating).map(|(i, _)| i).collect();
+            if slots.len() > 1 {
+                let mut order: Vec<crate::wm::Managed> = slots.iter().map(|&i| self.managed[i].clone()).collect();
+                if forward {
+                    order.rotate_left(1);
+                } else {
+                    order.rotate_right(1);
+                }
+                for (&i, m) in slots.iter().zip(order) {
+                    self.managed[i] = m;
+                }
+                self.relayout();
+                self.focus_master(ws);
+                return;
+            }
+        }
         let here: Vec<Window> = self.managed.iter().filter(|m| m.ws == self.active_ws).map(|m| m.window.clone()).collect();
         if here.is_empty() {
             return;
