@@ -520,12 +520,17 @@ impl Loom {
                         // an X program's cursor (Bitwig) comes in X pixels, which are this screen's own pixels
                         // (xscreens.rs): drawn 1:1, a small one grown to the theme arrow's size (cursor_base())
                         let from_x = smithay::reexports::wayland_server::Resource::client(s).is_some_and(|c| self.x.client.as_ref().is_some_and(|x| x.id() == c.id()));
+                        // every cursor at the size chosen (cursor_base(), KDE's): a program draws its own at
+                        // the size it read at start (System Settings: 24 and 32 beside loom's 38)
+                        let h = smithay::backend::renderer::utils::with_renderer_surface_state(s, |st| st.surface_size().map(|z| z.h as f64)).flatten();
                         let scale = if from_x {
                             let want = cursor_base() * os;
-                            let h = smithay::backend::renderer::utils::with_renderer_surface_state(s, |st| st.surface_size().map(|z| z.h as f64)).flatten().unwrap_or(want);
-                            (want / h.max(1.0)).max(1.0)
+                            (want / h.unwrap_or(want).max(1.0)).max(1.0)
                         } else {
-                            os
+                            match h {
+                                Some(h) if h > 0.0 && (h - cursor_base()).abs() > 1.0 => os * cursor_base() / h,
+                                _ => os,
+                            }
                         };
                         let loc = (at - hot.to_f64().to_physical(scale)).to_i32_round();
                         elements.extend(render_elements_from_surface_tree(&mut *r, s, loc, scale, 1.0, Kind::Cursor).into_iter().map(TtyElement::Surface));
