@@ -344,21 +344,29 @@ void main() {
     // the outer edge's partly covered pixels (a 1 px border at 1.6) got the blurred wallpaper
     // (xray) as their backdrop over the window really under them: a bright 1 px line round an
     // opaque panel. An edge pixel (a neighbour 1.5 px away is see-through) keeps what is under it.
-    if (m == 1.0 && color.a < 0.999 && ignore >= 0.0) {
+    // The same for a rounded window's corner (a title bar's: a light arc round it), where nothing is
+    // see-through but the edge itself.
+    if (m == 1.0 && color.a < 0.999 && (ignore >= 0.0 || radius > 0.0)) {
         vec2 d = 1.5 / elem_size;
         float n = min(min(texture2D(tex, v_coords + vec2(d.x, 0.0)).a, texture2D(tex, v_coords - vec2(d.x, 0.0)).a),
                       min(texture2D(tex, v_coords + vec2(0.0, d.y)).a, texture2D(tex, v_coords - vec2(0.0, d.y)).a));
-        if (n <= ignore) m = 0.0;
+        if (n <= max(ignore, 0.004)) m = 0.0;
     }
-    vec4 outc = color + vec4(clamp(bg, 0.0, 1.0), 1.0) * m * (1.0 - color.a);
+    // the rounded box's coverage of this pixel (1 inside, less on a corner's edge)
+    float e = 1.0;
     if (radius > 0.0) {
         vec2 p = elem_off + v_coords * elem_size;
         vec2 q = abs(p - geo_size * 0.5) - (geo_size * 0.5 - vec2(radius));
         if (q.x > 0.0 && q.y > 0.0) {
             float d = pow(pow(q.x, power) + pow(q.y, power), 1.0 / power);
-            outc *= clamp(radius - d + 0.5, 0.0, 1.0);
+            e = clamp(radius - d + 0.5, 0.0, 1.0);
         }
     }
+    // the blur fills only the part of the box the element leaves see-through: (1 - a) inside, and
+    // on a corner's edge (where the element is cut round too) its coverage less the element's. As
+    // (1 - a) * e an opaque title bar's half-covered corner pixels got a quarter of blurred wallpaper
+    // (xray): a light arc round the corner
+    vec4 outc = color * e + vec4(clamp(bg, 0.0, 1.0), 1.0) * m * max(e - color.a, 0.0);
     outc *= alpha;
 #if defined(DEBUG_FLAGS)
     if (tint == 1.0)
