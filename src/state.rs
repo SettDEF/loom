@@ -1011,6 +1011,8 @@ impl Loom {
                 return smithay::reexports::calloop::timer::TimeoutAction::ToDuration(std::time::Duration::from_secs(1));
             }
             let st = std::mem::take(&mut s.stats);
+            // the program names stay (a program that sent no buffer this second was "?")
+            s.stats.names = st.names.clone();
             let every = st.secs;
             // nothing happened: no line (an idle desktop stays quiet in the log too)
             if st.frames + st.dma + st.shm > 0 {

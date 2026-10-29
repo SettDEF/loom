@@ -65,6 +65,11 @@ pub struct Screen {
     pub compositor: Compositor,
     /// a frame is on its way to the screen (the next waits for its vblank)
     pub pending: bool,
+    /// nothing new was drawn on it, so no refresh comes: its programs are owed their frame
+    /// callbacks, sent a refresh from `owed_at` (each screen its own: one owed flag for all was
+    /// cleared by the other screen's refresh, and a fullscreen video waited for its callback for
+    /// ever while the AOC refreshed beside it)
+    pub owed: Option<std::time::Instant>,
     /// something changed since its last frame
     pub needs: bool,
     /// the refresh period, for frame callbacks when nothing reached the screen
@@ -454,8 +459,10 @@ impl Loom {
     fn tty_frame(&mut self, renderer: &Rc<RefCell<GlesRenderer>>) {
         let Some(t) = self.tty.as_ref() else { return };
         let period = t.screens.iter().map(|s| s.period).min().unwrap_or(Duration::from_millis(16));
-        if self.frames_owed && t.screens.iter().all(|s| !s.pending) && t.owed_at.elapsed() >= period {
-            self.send_frames();
+        // each screen owed its frame callbacks gets them a refresh later, when its own frame is out
+        let due: Vec<Output> = t.screens.iter().filter(|s| !s.pending && s.owed.is_some_and(|at| at.elapsed() >= s.period)).map(|s| s.output.clone()).collect();
+        for o in due {
+            self.send_frames_for(&o);
         }
         // screen or window copies asked for (grim, previews): drawn even when nothing else changed
         if self.captures_ready() {
@@ -572,18 +579,19 @@ impl Loom {
                     Err(e) => eprintln!("loom: queue frame on {}: {e:?}", output.name()),
                 },
                 // nothing changed on this screen: the programs still get their frame, a refresh from now
-                Ok(_) => owed = true,
+                Ok(_) => {
+                    owed = true;
+                    if let Some(s) = self.tty.as_mut().and_then(|t| t.screens.get_mut(i)) {
+                        s.owed.get_or_insert(now);
+                    }
+                }
                 Err(e) => eprintln!("loom: render on {}: {e:?}", output.name()),
             }
             self.stats.render_us += us;
             self.stats.render_max_us = self.stats.render_max_us.max(us);
         }
         if owed {
-            if let Some(t) = self.tty.as_mut() {
-                t.owed_at = now;
-            }
             self.wake_in(period);
-            self.frames_owed = true;
         }
         self.frames += 1;
         crate::capture::run::<_, smithay::backend::renderer::gles::GlesTexture>(self, &mut *renderer.borrow_mut());
@@ -591,8 +599,10 @@ impl Loom {
 
     /// One screen's refresh came: its programs may draw their next frame.
     pub fn send_frames_for(&mut self, o: &Output) {
-        // what was owed came (the idle path below would send every screen's again)
-        self.frames_owed = false;
+        // what this screen was owed came
+        if let Some(s) = self.tty.as_mut().and_then(|t| t.screens.iter_mut().find(|s| &s.output == o)) {
+            s.owed = None;
+        }
         let ms = Duration::from_millis(self.now_ms() as u64);
         self.frames_to_output(o, ms);
         self.space.refresh();
@@ -812,6 +822,7 @@ impl Loom {
             crtc,
             compositor,
             pending: false,
+            owed: None,
             needs: true,
             period: Duration::from_micros(1_000_000 / refresh),
             dark: false,
