@@ -191,6 +191,9 @@ fn run_lua(src: &str, base: &Look) -> Result<Look, String> {
 impl crate::state::Loom {
     /// Watches init.lua (its folder, so a file saved by renaming counts too): applied on change.
     pub fn watch_config(&mut self) {
+        // KDE's cursor choice, before any screen loads its arrows, and when it changes
+        self.cursor_theme_apply();
+        self.watch_kde_cursor();
         use inotify::{Inotify, WatchMask};
         let path = init_lua();
         let Some(dir) = path.parent().map(std::path::Path::to_path_buf) else { return };

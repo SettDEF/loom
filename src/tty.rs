@@ -263,9 +263,6 @@ pub fn run(opts: Options) -> Result<(), Box<dyn std::error::Error>> {
     state.init_idle();
     // init.lua applied when it changes
     state.watch_config();
-    // KDE's cursor choice, before the screens load their arrows, and when it changes
-    state.cursor_theme_apply();
-    state.watch_kde_cursor();
 
     // an older loom session on another console: ended first (restarting is just starting again)
     end_other_looms();
