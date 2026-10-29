@@ -388,7 +388,10 @@ impl Loom {
         let map = layer_map_for_output(&output);
         let local = at - off.to_f64();
         let layer_hit = |which: &[L]| layer_input_at(&map, which, local).map(|(_, s, loc)| (s, (loc + off).to_f64()));
-        layer_hit(&[L::Overlay, L::Top])
+        // a fullscreen window covers the top layer (the bar, the sidebars' edges), as it is drawn:
+        // they took its clicks unseen and opened sidebars over the game
+        let covered = self.fullscreen_outputs().contains(&output.name());
+        layer_hit(if covered { &[L::Overlay] } else { &[L::Overlay, L::Top] })
             .or_else(|| {
                 self.space.element_under(at).and_then(|(w, loc)| w.surface_under(at - loc.to_f64(), WindowSurfaceType::ALL).map(|(s, sloc)| (s, (sloc + loc).to_f64())))
             })
