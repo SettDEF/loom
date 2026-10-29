@@ -191,6 +191,7 @@ impl Loom {
         let maxed = self.maximized.clone();
         // center: the master (first) floats over the others, so it is raised; the rest stay under it
         let center = suit.suit == "center";
+        let master = tiled.first().map(|(w, _)| w.clone()).filter(|_| center);
         for (i, ((win, addr), rect)) in tiled.into_iter().zip(rects).enumerate() {
             // maximized: the whole area; a title bar (ii-decor) takes its top, the window the rest
             let rect = if maxed.as_ref() == Some(&win) {
@@ -239,6 +240,10 @@ impl Loom {
             }
             self.space.map_element(win, rect.loc, raise);
         }
+        // after the others: one mapped after it (shown again on a workspace switch) went on top of it
+        if let Some(m) = master {
+            self.space.raise_element(&m, false);
+        }
     }
     /// Workspace `n` shown, as Hyprland does it on several screens: shown on another screen
     /// already, that screen gets the focus (and the pointer); one that belongs to another screen
@@ -250,7 +255,7 @@ impl Loom {
         if let Some(o) = self.output_showing(n) {
             self.focus_output(&o);
             self.pointer_to_middle(&o);
-            self.focus_next(n);
+            self.focus_shown(n);
             self.hypr_event(&format!("workspacev2>>{n},{n}"));
             self.pointer_refresh();
             return;
@@ -283,7 +288,7 @@ impl Loom {
             suspend(w, false);
         }
         self.relayout();
-        self.focus_next(n);
+        self.focus_shown(n);
         if !existed {
             self.hypr_event(&format!("createworkspacev2>>{n},{n}"));
         }
@@ -352,6 +357,16 @@ impl Loom {
         let me = self.managed.iter().position(|m| m.window == w);
         if let (Some(a), Some(b)) = (first, me) {
             self.managed.swap(a, b);
+        }
+    }
+
+    /// The focus on a workspace just shown: on a center one its master (it floats over the rest; the
+    /// last focused, raised for the focus, came over it on every switch back), else the last focused.
+    pub fn focus_shown(&mut self, ws: i32) {
+        if self.layouts.of(&ws.to_string()).suit == "center" {
+            self.focus_master(ws);
+        } else {
+            self.focus_next(ws);
         }
     }
 
