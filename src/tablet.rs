@@ -106,8 +106,16 @@ impl Loom {
         self.activity(e.tip_state() == TabletToolTipState::Down);
         let at = self.pen_at(&e);
         let time = self.now_ms();
-        let tablet_prog = self.surface_at(at).is_some_and(|(s, _)| self.speaks_tablet(&s));
         let down = e.tip_state() == TabletToolTipState::Down;
+        // the lift goes where the touch went: decided anew under the pen, a stroke begun in a
+        // drawing program and ended over another window never ended there (it drew on)
+        let tablet_prog = match (down, self.pen_down.take()) {
+            (false, Some(was)) => was,
+            _ => self.surface_at(at).is_some_and(|(s, _)| self.speaks_tablet(&s)),
+        };
+        if down {
+            self.pen_down = Some(tablet_prog);
+        }
         if !tablet_prog {
             // a mouse-only program (or none): the tip is the left button (focus, binds, all of it)
             self.pointer_button(BTN_LEFT, down, time);

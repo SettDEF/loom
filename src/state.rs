@@ -71,6 +71,9 @@ pub struct Loom {
     /// a screen unplugged: its workspaces (moved to another meanwhile) and the one it showed, so they
     /// go back when it returns (they stayed on the other screen)
     pub ws_home: std::collections::HashMap<i32, String>,
+    /// the pen's tip is down, and where it went: to a program that speaks the pen (true) or as
+    /// the left button (false); its lift goes the same way
+    pub pen_down: Option<bool>,
     pub shown_before: std::collections::HashMap<String, i32>,
     /// headless/nested: screens unplugged by `loomdebug unplug`, with where they were
     pub parked: Vec<(smithay::output::Output, smithay::utils::Point<i32, smithay::utils::Logical>)>,
@@ -281,6 +284,7 @@ impl Loom {
             shown_on: Default::default(),
             ws_on: Default::default(),
             ws_home: Default::default(),
+            pen_down: None,
             shown_before: Default::default(),
             parked: Vec::new(),
             output_globals: Default::default(),
