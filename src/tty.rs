@@ -558,7 +558,9 @@ impl Loom {
             let s = &mut self.tty.as_mut().expect("tty").screens[i];
             s.needs = false;
             let t0 = std::time::Instant::now();
-            let rendered = s.compositor.render_frame(&mut *r, &elements, [0.08, 0.08, 0.1, 1.0], FrameFlags::DEFAULT);
+            // windows on display planes only with render:direct_scanout; the cursor plane always
+            let flags = if self.look.direct_scanout { FrameFlags::DEFAULT } else { FrameFlags::ALLOW_CURSOR_PLANE_SCANOUT };
+            let rendered = s.compositor.render_frame(&mut *r, &elements, [0.08, 0.08, 0.1, 1.0], flags);
             let us = t0.elapsed().as_micros() as u64;
             match rendered {
                 Ok(res) if !res.is_empty => match s.compositor.queue_frame(()) {
