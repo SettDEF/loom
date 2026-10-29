@@ -118,7 +118,9 @@ pub struct Loom {
     /// (Hyprland sends both; the shell's onReleased waits for it), whatever the mods are by then
     pub globals_held: Vec<(crate::hypr_proto::Held, String)>,
     /// the fullscreen window, if one is
-    pub fullscreen: Option<Window>,
+    /// the fullscreen windows, one per workspace at most (Hyprland's): one for all screens took a
+    /// video out of fullscreen when a game on the other screen went fullscreen
+    pub fullscreen: Vec<Window>,
     /// a floating window's place and size before it went fullscreen, by address: given back when it leaves
     pub full_restore: std::collections::HashMap<u64, smithay::utils::Rectangle<i32, smithay::utils::Logical>>,
     /// the repeating bind held (its key, its actions), its timer's generation; the event loop
@@ -298,7 +300,7 @@ impl Loom {
             binds: Default::default(),
             bind_actions: Vec::new(),
             globals_held: Vec::new(),
-            fullscreen: None,
+            fullscreen: Vec::new(),
             full_restore: Default::default(),
             repeat: None,
             repeat_gen: 0,
@@ -688,7 +690,7 @@ impl XdgShellHandler for Loom {
         let Some(w) = self.managed.iter().find(|m| m.window.toplevel() == Some(&surface)).map(|m| m.window.clone()) else { return };
         let Some(pointer) = self.seat.get_pointer() else { return };
         // only while the press that asked is still down
-        if !pointer.is_grabbed() || self.drag.is_some() || self.fullscreen.as_ref() == Some(&w) {
+        if !pointer.is_grabbed() || self.drag.is_some() || self.is_full(&w) {
             return;
         }
         self.drag_start_on(&w, false, 0x110);

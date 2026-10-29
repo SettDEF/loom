@@ -67,7 +67,7 @@ impl Dispatch<ZwlrForeignToplevelHandleV1, u64> for Loom {
             }
             handle::Request::SetFullscreen { .. } | handle::Request::UnsetFullscreen => {
                 let want = matches!(request, handle::Request::SetFullscreen { .. });
-                if (state.fullscreen.as_ref() == Some(&m.window)) != want {
+                if state.is_full(&m.window) != want {
                     state.focus_window(&m.window);
                     state.toggle_fullscreen();
                 }
@@ -107,7 +107,7 @@ impl Loom {
         if self.focused.as_ref() == Some(w) {
             st.push(State::Activated as u32);
         }
-        if self.fullscreen.as_ref() == Some(w) {
+        if self.is_full(w) {
             st.push(State::Fullscreen as u32);
         }
         st.iter().flat_map(|v| v.to_ne_bytes()).collect()

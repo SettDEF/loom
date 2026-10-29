@@ -508,7 +508,7 @@ impl crate::state::Loom {
         if w.x11_surface().is_some_and(crate::xwayland::x_menu_like) {
             return Kind::None;
         }
-        self.decor.borrow().conf.kind(&self.class_of(w), self.fullscreen.as_ref() == Some(w))
+        self.decor.borrow().conf.kind(&self.class_of(w), self.is_full(w))
     }
 
     /// The height its title bar takes above it (0: none, or a pill over its content).

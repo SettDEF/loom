@@ -621,10 +621,10 @@ impl Loom {
         json!({
             "address": format!("0x{:x}", m.addr), "mapped": true, "hidden": !self.is_shown(m.ws),
             "at": [loc.x, loc.y], "size": [size.w, size.h],
-            "workspace": { "id": m.ws, "name": m.ws.to_string() },
+            "workspace": { "id": m.ws, "name": if m.ws == crate::wm::SPECIAL { "special:special".to_string() } else { m.ws.to_string() } },
             "floating": m.floating, "pseudo": false, "monitor": self.ws_on.get(&m.ws).map(|n| self.output_id(n)).unwrap_or(0),
             "class": class, "title": title, "initialClass": class, "initialTitle": title,
-            "pid": m.pid, "xwayland": m.window.x11_surface().is_some(), "pinned": false, "fullscreen": if self.fullscreen.as_ref() == Some(&m.window) { 2 } else { 0 }, "fullscreenClient": if self.fullscreen.as_ref() == Some(&m.window) { 2 } else { 0 },
+            "pid": m.pid, "xwayland": m.window.x11_surface().is_some(), "pinned": false, "fullscreen": if self.is_full(&m.window) { 2 } else { 0 }, "fullscreenClient": if self.is_full(&m.window) { 2 } else { 0 },
             "grouped": [], "tags": [], "swallowing": "0x0",
             "focusHistoryID": if self.focused.as_ref() == Some(&m.window) { 0 } else { 1 },
             "inhibitingIdle": false, "xdgTag": "", "xdgDescription": "", "contentType": "none",

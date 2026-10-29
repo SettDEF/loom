@@ -167,7 +167,7 @@ where
         }
     };
     // a fullscreen window here covers the bar and dock (Top), as on Hyprland; Overlay stays above it
-    let covered = state.fullscreen_output().as_deref() == Some(output.name().as_str());
+    let covered = state.fullscreen_outputs().contains(&output.name());
     layers(&mut out, &mut targets, renderer, if covered { &[Layer::Overlay] } else { &[Layer::Overlay, Layer::Top] });
     let look = &state.look;
     // closed windows KDE's effects still animate: in front, as their last frame
@@ -219,7 +219,7 @@ where
         // its title bar (ii-decor) above it, or a pill over a corner of it: drawn in front of it
         let kind = state.decor_kind(w);
         let bh = match &kind { crate::decor::Kind::Bar(h) => *h as f64, _ => 0.0 };
-        let radius_l = if state.fullscreen.as_ref() == Some(w) { 0.0 } else { look.rounding };
+        let radius_l = if state.is_full(w) { 0.0 } else { look.rounding };
         if !matches!(kind, crate::decor::Kind::None) {
             let addr = state.managed_of(w).map(|m| m.addr).unwrap_or(0);
             let (class, title) = (state.class_of(w), state.title_of(w));
@@ -239,7 +239,7 @@ where
                 let logical: smithay::utils::Size<i32, smithay::utils::Logical> = (size_l.0.round() as i32, size_l.1.round() as i32).into();
                 if let Some(e) = renderer.picture(buf, ((at.0 * os).round(), (at.1 * os).round()).into(), logical, ((size_l.0 * os).round() as i32, (size_l.1 * os).round() as i32), alpha as f32) {
                     // glass (ii-decor's blur): the window behind the bar blurred, in the window's rounded box
-                    if d.conf.blur && matches!(kind, crate::decor::Kind::Bar(_)) && state.fullscreen.as_ref() != Some(w) {
+                    if d.conf.blur && matches!(kind, crate::decor::Kind::Bar(_)) && !state.is_full(w) {
                         let boxed = Rectangle::<i32, Physical>::new(((gx * os).round() as i32, ((gy - bh * sy) * os).round() as i32).into(), ((sw * sx * os).round() as i32, ((sh + bh) * sy * os).round() as i32).into());
                         let r = look.rounding * (sx.min(sy) * os) as f32;
                         targets.push((out.len()..out.len() + 1, crate::blur::Mask { ignore: None, geo: boxed, radius: if r > 0.5 { r } else { 0.0 }, power: look.rounding_power }));
@@ -250,12 +250,12 @@ where
         }
         // the window's box on screen (its bar included), for its corners; none for a fullscreen window
         let boxed = Rectangle::<i32, Physical>::new(((gx * os).round() as i32, ((gy - bh * sy) * os).round() as i32).into(), ((sw * sx * os).round() as i32, ((sh + bh) * sy * os).round() as i32).into());
-        let radius = if state.fullscreen.as_ref() == Some(w) { 0.0 } else { look.rounding * (sx.min(sy) * os) as f32 };
+        let radius = if state.is_full(w) { 0.0 } else { look.rounding * (sx.min(sy) * os) as f32 };
         let a = alpha as f32 * smithay::wayland::seat::WaylandFocus::wl_surface(w).map_or(1.0, |s| state.opacity_of(&s));
         let es = AsRenderElements::<R>::render_elements::<WaylandSurfaceRenderElement<R>>(w, renderer, loc, Scale::from((sx * os, sy * os)), a);
         let main_id = smithay::wayland::seat::WaylandFocus::wl_surface(w).map(|s| smithay::backend::renderer::element::Id::from_wayland_resource(&*s));
         // see-through apps the Glass rules name: blurred behind (their own surfaces, not popups)
-        let blurred = state.blur.window(&state.class_of(w)) && state.fullscreen.as_ref() != Some(w);
+        let blurred = state.blur.window(&state.class_of(w)) && !state.is_full(w);
         for e in es {
             // the window's own surfaces are rounded; a popup or menu reaching past its box is not
             let g = e.geometry(Scale::from(os));
@@ -271,7 +271,7 @@ where
             out.push(if radius > 0.5 && inside { renderer.rounded(e, boxed, Scale::from(os), radius, look.rounding_power) } else { R::plain(e) });
         }
         // its border and shadow, behind it (none fullscreen; no border for the Glass apps)
-        if state.fullscreen.as_ref() != Some(w) {
+        if !state.is_full(w) {
             if let Some(m) = state.managed_of(w) {
                 let active = state.focused.as_ref() == Some(w);
                 let bordered = !state.blur.window(&state.class_of(w));

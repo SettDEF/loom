@@ -53,7 +53,7 @@ impl Loom {
             "visible": self.space.elements().any(|e| e == w), "minimized": m.ws == crate::wm::SPECIAL,
             "hasDecoration": !matches!(self.decor_kind(w), crate::decor::Kind::None),
             "geometry": geo, "frameGeometry": geo, "expandedGeometry": geo,
-            "fullScreen": self.fullscreen.as_ref() == Some(w), "maximized": self.maximized.as_ref() == Some(w),
+            "fullScreen": self.is_full(w), "maximized": self.maximized.as_ref() == Some(w),
             "modal": false, "desktopWindow": false, "dock": false, "splash": false, "toolbar": false, "menu": false,
             "dropdownMenu": false, "popupMenu": false, "tooltip": false, "notification": false, "onScreenDisplay": false,
             "lockScreen": false, "outline": false, "skipsCloseAnimation": false, "deleted": false, "screen": 0,

@@ -103,8 +103,8 @@ impl Loom {
     pub fn unmanage(&mut self, window: &Window) {
         let Some(i) = self.managed.iter().position(|m| &m.window == window) else { return };
         // a fullscreen window closing: the bar and the rest come back
-        if self.fullscreen.as_ref() == Some(window) {
-            self.fullscreen = None;
+        if self.is_full(window) {
+            self.fullscreen.retain(|f| f != window);
             self.hypr_event("fullscreen>>0");
         }
         if self.fx.is_some() {
@@ -155,9 +155,9 @@ impl Loom {
             }
         }
         // a fullscreen window: the whole screen showing its workspace, above the rest
-        let full_ws = self.fullscreen.as_ref().and_then(|f| self.managed_of(f)).map(|m| m.ws);
-        if let (Some(f), Some(o)) = (self.fullscreen.clone(), full_ws.and_then(|ws| self.output_showing(ws))) {
-            let Some(full) = self.space.output_geometry(&o) else { return };
+        for f in self.fullscreen.clone() {
+            let Some(o) = self.managed_of(&f).map(|m| m.ws).and_then(|ws| self.output_showing(ws)) else { continue };
+            let Some(full) = self.space.output_geometry(&o) else { continue };
             if let Some(t) = f.toplevel() {
                 t.with_pending_state(|s| {
                     s.size = Some(full.size);
@@ -181,7 +181,7 @@ impl Loom {
 
     /// One workspace's tiled windows in `area`; `raise` puts them on top (the special one).
     fn tile(&mut self, ws: i32, area: Rectangle<i32, Logical>, raise: bool) {
-        let tiled: Vec<(Window, u64)> = self.managed.iter().filter(|m| m.ws == ws && !m.floating && self.fullscreen.as_ref() != Some(&m.window) && (m.drawn || m.since.elapsed() < DRAW_WAIT)).map(|m| (m.window.clone(), m.addr)).collect();
+        let tiled: Vec<(Window, u64)> = self.managed.iter().filter(|m| m.ws == ws && self.takes_tile(m)).map(|m| (m.window.clone(), m.addr)).collect();
         let suit = self.layouts.of(&ws.to_string());
         let rects: Vec<Rectangle<i32, Logical>> = crate::layouts::arrange(tiled.len(), area, &suit)
             .into_iter()
@@ -249,6 +249,15 @@ impl Loom {
     /// already, that screen gets the focus (and the pointer); one that belongs to another screen
     /// is shown there; else the focused screen shows it (made when it was not there).
     pub fn switch_workspace(&mut self, n: i32) {
+        // the special workspace opens over this one (as togglespecialworkspace); it became the
+        // screen's workspace and hid the one under it
+        if n == SPECIAL {
+            if !self.special_shown {
+                self.toggle_special();
+            }
+            self.focus_next(SPECIAL);
+            return;
+        }
         if n == self.active_ws {
             return;
         }
@@ -318,10 +327,18 @@ impl Loom {
     /// other screen vanished.
     pub fn move_window_to_workspace(&mut self, w: &Window, n: i32) {
         let was_focused = self.focused.as_ref() == Some(w);
-        let Some(m) = self.managed.iter_mut().find(|m| &m.window == w) else { return };
-        if m.ws == n {
+        if self.managed_of(w).is_none_or(|m| m.ws == n) {
             return;
         }
+        // out of fullscreen or maximized first, as Hyprland: moved on, it stayed so on a hidden
+        // workspace (the bar never heard fullscreen>>0) and came back that way
+        if self.is_full(w) {
+            self.set_fullscreen(w, false);
+        }
+        if self.maximized.as_ref() == Some(w) {
+            self.toggle_maximize(w);
+        }
+        let Some(m) = self.managed.iter_mut().find(|m| &m.window == w) else { return };
         m.ws = n;
         if let Some(at) = self.space.element_location(w) {
             m.last_at = at;
@@ -353,6 +370,23 @@ impl Loom {
         if let (Some(a), Some(b)) = (first, me) {
             self.managed.swap(a, b);
         }
+    }
+
+    /// Whether `w` is fullscreen.
+    pub fn is_full(&self, w: &Window) -> bool {
+        self.fullscreen.iter().any(|f| f == w)
+    }
+
+    /// Workspace `ws`'s fullscreen window.
+    pub fn full_on(&self, ws: i32) -> Option<Window> {
+        self.fullscreen.iter().find(|f| self.managed_of(f).is_some_and(|m| m.ws == ws)).cloned()
+    }
+
+    /// The workspace the keys act on: the focused window's (the special one when that is shown and
+    /// focused), else the focused screen's. With active_ws the focus keys and swaps reached into the
+    /// normal workspace under a shown special one.
+    pub fn focus_ws(&self) -> i32 {
+        self.focused.as_ref().and_then(|w| self.managed_of(w)).map(|m| m.ws).filter(|ws| self.is_shown(*ws)).unwrap_or(self.active_ws)
     }
 
     /// A window shown (its workspace came on screen): where it is if it is shown already (a pinned
@@ -391,7 +425,7 @@ impl Loom {
 
     /// Workspace `ws`'s fullscreen window, else its master (first tiled), else the last focused there.
     pub fn focus_master(&mut self, ws: i32) {
-        let full = self.fullscreen.clone().filter(|w| self.managed_of(w).is_some_and(|m| m.ws == ws));
+        let full = self.full_on(ws);
         match full.or_else(|| self.managed.iter().find(|m| m.ws == ws && !m.floating).map(|m| m.window.clone())) {
             Some(w) => self.focus_window(&w),
             None => self.focus_next(ws),
@@ -442,6 +476,7 @@ impl Loom {
     /// movefocus l|r|u|d: the nearest window that way on the workspace (by centres).
     pub fn move_focus(&mut self, dir: &str) {
         let Some(cur) = self.focused.clone() else { return };
+        let ws = self.focus_ws();
         let centre = |w: &Window| self.space.element_geometry(w).map(|g| (g.loc.x + g.size.w / 2, g.loc.y + g.size.h / 2));
         let Some((cx, cy)) = centre(&cur) else { return };
         let (dx, dy) = match dir.trim() {
@@ -453,7 +488,7 @@ impl Loom {
         let best = self
             .managed
             .iter()
-            .filter(|m| m.ws == self.active_ws && m.window != cur)
+            .filter(|m| m.ws == ws && m.window != cur)
             .filter_map(|m| centre(&m.window).map(|c| (m.window.clone(), c)))
             .filter(|(_, (x, y))| (x - cx) * dx + (y - cy) * dy > 0)
             .min_by_key(|(_, (x, y))| {
@@ -471,8 +506,8 @@ impl Loom {
     pub fn cycle_focus(&mut self, forward: bool) {
         // center: the keys turn the tiles round, the next one into the middle (Awesome's way; only
         // the focus moved, behind the master, and the windows never changed place)
-        if self.layouts.of(&self.active_ws.to_string()).suit == "center" {
-            let ws = self.active_ws;
+        if self.layouts.of(&self.focus_ws().to_string()).suit == "center" {
+            let ws = self.focus_ws();
             let slots: Vec<usize> = self.managed.iter().enumerate().filter(|(_, m)| m.ws == ws && !m.floating).map(|(i, _)| i).collect();
             if slots.len() > 1 {
                 let mut order: Vec<crate::wm::Managed> = slots.iter().map(|&i| self.managed[i].clone()).collect();
@@ -489,7 +524,8 @@ impl Loom {
                 return;
             }
         }
-        let here: Vec<Window> = self.managed.iter().filter(|m| m.ws == self.active_ws).map(|m| m.window.clone()).collect();
+        let ws = self.focus_ws();
+        let here: Vec<Window> = self.managed.iter().filter(|m| m.ws == ws).map(|m| m.window.clone()).collect();
         if here.is_empty() {
             return;
         }
@@ -535,19 +571,21 @@ impl Loom {
     /// fullscreen: the focused window over the whole output, or back into the tiling.
     pub fn toggle_fullscreen(&mut self) {
         let Some(w) = self.focused.clone() else { return };
-        let on = self.fullscreen.as_ref() != Some(&w);
+        let on = !self.is_full(&w);
         self.set_fullscreen(&w, on);
     }
 
     /// `w` fullscreen or not: from a bind, or the program asking (F11, a video's button, a game).
     pub fn set_fullscreen(&mut self, w: &Window, on: bool) {
-        if on == (self.fullscreen.as_ref() == Some(w)) {
+        if on == (self.is_full(w)) {
             return;
         }
         // the one fullscreen before (another window): really out of fullscreen first, or it kept the state and the
         // whole screen's size while loom treated it as an ordinary window (a floating one then sat behind the layout)
         if on {
-            if let Some(old) = self.fullscreen.clone().filter(|o| o != w) {
+            // the one before on the same workspace (each workspace has its own: another screen's stays)
+            if let Some(old) = self.managed_of(w).map(|m| m.ws).and_then(|ws| self.full_on(ws)).filter(|o| o != w) {
+                self.fullscreen.retain(|f| f != &old);
                 self.leave_fullscreen(&old);
             }
             if let Some(m) = self.managed_of(w).filter(|m| m.floating) {
@@ -556,10 +594,10 @@ impl Loom {
                     self.full_restore.insert(addr, g);
                 }
             }
-            self.fullscreen = Some(w.clone());
+            self.fullscreen.push(w.clone());
             self.focus_window(w);
         } else {
-            self.fullscreen = None;
+            self.fullscreen.retain(|f| f != w);
             self.leave_fullscreen(w);
         }
         self.hypr_event(&format!("fullscreen>>{}", u8::from(on)));
@@ -572,6 +610,7 @@ impl Loom {
     /// The window nearest the focused one in direction `dir` (l r u d) on the workspace.
     fn neighbour(&self, dir: &str) -> Option<Window> {
         let cur = self.focused.clone()?;
+        let ws = self.focus_ws();
         let centre = |w: &Window| self.space.element_geometry(w).map(|g| (g.loc.x + g.size.w / 2, g.loc.y + g.size.h / 2));
         let (cx, cy) = centre(&cur)?;
         let (dx, dy) = match dir.trim() {
@@ -582,7 +621,7 @@ impl Loom {
         };
         self.managed
             .iter()
-            .filter(|m| m.ws == self.active_ws && m.window != cur)
+            .filter(|m| m.ws == ws && m.window != cur)
             .filter_map(|m| centre(&m.window).map(|c| (m.window.clone(), c)))
             .filter(|(_, (x, y))| (x - cx) * dx + (y - cy) * dy > 0)
             .min_by_key(|(_, (x, y))| ((x - cx) * dx + (y - cy) * dy).abs() + 2 * ((x - cx) * dy + (y - cy) * dx).abs())
@@ -739,9 +778,10 @@ impl Loom {
     /// Whether a window is told to draw its next frame: not when a fullscreen window covers it
     /// (it cannot be seen; its program idles instead of drawing for nothing).
     pub fn wants_frame(&self, w: &Window) -> bool {
-        match &self.fullscreen {
-            Some(f) if self.managed_of(f).is_some_and(|m| m.ws == self.active_ws) => f == w || self.managed_of(w).is_none(),
-            _ => true,
+        // the fullscreen window of the workspace it is on covers it (each screen its own)
+        match self.managed_of(w).and_then(|m| self.full_on(m.ws)) {
+            Some(f) => &f == w,
+            None => true,
         }
     }
 }
@@ -775,12 +815,21 @@ impl Loom {
         self.area_of(self.output.as_ref()?)
     }
 
+    /// Whether a window gets a tile: not floating, not fullscreen, drawn (or still in its wait).
+    fn takes_tile(&self, m: &Managed) -> bool {
+        !m.floating && !self.is_full(&m.window) && (m.drawn || m.since.elapsed() < DRAW_WAIT)
+    }
+
     /// The tiled window whose layout slot holds `at` (counting `with` as tiled), by the layout
     /// itself rather than where the windows are drawn right now.
     pub fn tile_slot_at(&self, at: smithay::utils::Point<f64, Logical>, with: &Window) -> Option<Window> {
-        let area = self.tile_area()?;
-        let tiled: Vec<Window> = self.managed.iter().filter(|m| m.ws == self.active_ws && (!m.floating || &m.window == with)).map(|m| m.window.clone()).collect();
-        let suit = self.layouts.of(&self.active_ws.to_string());
+        // the screen under the pointer (a drop on the other screen), with the same tiles the layout
+        // places: counting a fullscreen or never-drawn one shifted every slot onto the wrong window
+        let o = self.output_at(at).or_else(|| self.output.clone())?;
+        let area = self.area_of(&o)?;
+        let ws = self.shown_on.get(&o.name()).copied().unwrap_or(self.active_ws);
+        let tiled: Vec<Window> = self.managed.iter().filter(|m| m.ws == ws && (self.takes_tile(m) || &m.window == with)).map(|m| m.window.clone()).collect();
+        let suit = self.layouts.of(&ws.to_string());
         let rects = crate::layouts::arrange(tiled.len(), area, &suit);
         tiled.into_iter().zip(rects).find(|(_, r)| r.to_f64().contains(at)).map(|(w, _)| w)
     }
@@ -856,10 +905,10 @@ impl Loom {
     /// A fullscreen window stays first in the stack on its workspace: any window raised after it (focus, a new
     /// X window, a rule) was drawn under it but took its clicks, and a floating one could end up behind the layout
     pub fn keep_fullscreen_on_top(&mut self) {
-        let Some(full) = self.fullscreen.clone() else { return };
-        let Some(ws) = self.managed_of(&full).map(|m| m.ws) else { return };
-        if self.shown_on.values().any(|w| *w == ws) {
-            self.space.raise_element(&full, false);
+        for full in self.fullscreen.clone() {
+            if self.managed_of(&full).is_some_and(|m| self.shown_on.values().any(|w| *w == m.ws)) {
+                self.space.raise_element(&full, false);
+            }
         }
     }
 }

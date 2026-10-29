@@ -82,6 +82,10 @@ impl Loom {
 
     /// Workspace `ws` is on some screen now.
     pub fn is_shown(&self, ws: i32) -> bool {
+        // the special workspace is shown over another, not by a screen of its own
+        if ws == crate::wm::SPECIAL {
+            return self.special_shown;
+        }
         self.shown_on.values().any(|v| *v == ws)
     }
 
@@ -316,6 +320,22 @@ impl Loom {
     /// The workspaces two screens show, swapped.
     pub fn swap_active_workspaces(&mut self, p: &Output, q: &Output) {
         let (Some(a), Some(b)) = (self.shown_on.get(&p.name()).copied(), self.shown_on.get(&q.name()).copied()) else { return };
+        // floating windows go along to the other screen (the tiling moves only the tiled ones)
+        if let (Some(pg), Some(qg)) = (self.space.output_geometry(p), self.space.output_geometry(q)) {
+            let d = qg.loc - pg.loc;
+            let moving: Vec<(smithay::desktop::Window, Point<i32, Logical>)> = self
+                .managed
+                .iter()
+                .filter(|m| m.floating && !m.pinned && (m.ws == a || m.ws == b))
+                .filter_map(|m| Some((m.window.clone(), self.space.element_location(&m.window)? + if m.ws == a { d } else { Point::from((-d.x, -d.y)) })))
+                .collect();
+            for (w, to) in moving {
+                if let Some(x) = w.x11_surface() {
+                    let _ = x.configure(smithay::utils::Rectangle::new(to, x.geometry().size));
+                }
+                self.space.map_element(w, to, false);
+            }
+        }
         self.shown_on.insert(p.name(), b);
         self.shown_on.insert(q.name(), a);
         self.ws_on.insert(b, p.name());

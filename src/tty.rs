@@ -879,20 +879,18 @@ fn apply_ctm(drm: &DrmDevice, crtc: crtc::Handle, m: [f64; 9]) -> std::io::Resul
 }
 
 impl Loom {
-    /// The screen a fullscreen window is shown on.
-    pub fn fullscreen_output(&self) -> Option<String> {
-        let f = self.fullscreen.as_ref()?;
-        let ws = self.managed.iter().find(|m| &m.window == f)?.ws;
-        Some(self.output_showing(ws)?.name())
+    /// The screens a fullscreen window is shown on.
+    pub fn fullscreen_outputs(&self) -> Vec<String> {
+        self.fullscreen.iter().filter_map(|f| self.managed_of(f)).filter_map(|m| self.output_showing(m.ws)).map(|o| o.name()).collect()
     }
 
     /// Adaptive sync on each screen as its rule says: on, off, or on while a window is fullscreen
     /// there (vrr 2: a game's own frame rate, the desktop at the panel's).
     fn apply_vrr(&mut self) {
-        let full = self.fullscreen_output();
+        let full = self.fullscreen_outputs();
         let Some(t) = self.tty.as_mut() else { return };
         for s in &mut t.screens {
-            let want = s.vrr_can && match s.vrr { 1 => true, 2 => full.as_deref() == Some(s.output.name().as_str()), _ => false };
+            let want = s.vrr_can && match s.vrr { 1 => true, 2 => full.contains(&s.output.name()), _ => false };
             if want == s.vrr_on {
                 continue;
             }
