@@ -248,7 +248,9 @@ fn load_cursor(name: &str, size: u32) -> Option<(MemoryRenderBuffer, (i32, i32))
     let icon = name.parse::<smithay::input::pointer::CursorIcon>().ok();
     let names: Vec<&str> = std::iter::once(name).chain(icon.iter().flat_map(|i| i.alt_names().iter().copied())).collect();
     let t = xcursor::CursorTheme::load(&theme);
-    let path = names.iter().find_map(|n| t.load_icon(n)).or_else(|| names.iter().find_map(|n| xcursor::CursorTheme::load("Adwaita").load_icon(n))).or_else(|| t.load_icon("default"))?;
+    // the one nearest the theme itself: a theme without Inherits inherits "default" (Adwaita
+    // here), and asking for "default" first gave Adwaita's arrow over Oxygen's own left_ptr
+    let path = names.iter().filter_map(|n| t.load_icon_with_depth(n)).min_by_key(|(_, depth)| *depth).map(|(p, _)| p).or_else(|| names.iter().find_map(|n| xcursor::CursorTheme::load("Adwaita").load_icon(n))).or_else(|| t.load_icon("default"))?;
     let images = xcursor::parser::parse_xcursor(&std::fs::read(path).ok()?)?;
     let img = images.iter().min_by_key(|i| (i.size as i64 - size as i64).abs())?;
     let buf = MemoryRenderBuffer::from_slice(&img.pixels_rgba.chunks(4).flat_map(|p| [p[2], p[1], p[0], p[3]]).collect::<Vec<u8>>(), Fourcc::Argb8888, (img.width as i32, img.height as i32), 1, Transform::Normal, None);
