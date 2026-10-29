@@ -200,7 +200,9 @@ where
         let mut r = renderer.borrow_mut();
         let t0 = std::time::Instant::now();
         let elements = crate::render::elements(state, &mut *r, &output, std::time::Instant::now());
-        let want_png = snap_due || (fo.record.is_some() && state.frames < 400);
+        // --record: the first 400 frames (LOOM_RECORD_MAX for more)
+        let max = std::env::var("LOOM_RECORD_MAX").ok().and_then(|v| v.parse().ok()).unwrap_or(400);
+        let want_png = snap_due || (fo.record.is_some() && state.frames < max);
         let mut pixels = None;
         if let Ok(mut fb) = r.bind(&mut target) {
             let _ = damage.render_output(&mut *r, &mut fb, 0, &elements, [0.08, 0.08, 0.1, 1.0]);

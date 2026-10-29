@@ -208,6 +208,8 @@ pub struct Loom {
     pub win_ghosts: Vec<crate::layer_anim::WinGhost>,
     pub fx_last: std::collections::HashMap<u64, (smithay::backend::renderer::gles::GlesTexture, smithay::utils::Size<i32, smithay::utils::Logical>, smithay::utils::Point<i32, smithay::utils::Logical>)>,
     pub stats_on: bool,
+    /// hyprctl dispatch loomdebug stats: the stats line every second, not every minute
+    pub stats_fast: bool,
     pub stats: Stats,
     /// frame pacing (event driven, no ticking timer): the last frame drawn, a wake-up for the next one armed
     pub last_frame: Instant,
@@ -367,6 +369,7 @@ impl Loom {
             win_ghosts: Vec::new(),
             fx_last: Default::default(),
             stats_on: std::env::var_os("LOOM_STATS").is_some(),
+            stats_fast: std::env::var_os("LOOM_STATS").is_some(),
             stats: Default::default(),
             last_frame: Instant::now(),
             frame_wake_armed: false,
@@ -980,6 +983,10 @@ impl Loom {
 #[derive(Default)]
 pub struct Stats {
     pub frames: u32,
+    /// frame callbacks sent, by program (a window's per screen refresh)
+    pub sent_by: std::collections::HashMap<String, u32>,
+    /// seconds counted into this line
+    pub secs: u32,
     pub render_us: u64,
     pub render_max_us: u64,
     pub dma: u32,
@@ -994,11 +1001,17 @@ impl Loom {
     /// Once a second while stats are on: one line to the log, the counts started again.
     pub fn start_stats(&mut self) {
         self.stats_on = true;
-        // a line a minute (LOOM_STATS=1: a second, for measuring); 4000 lines an hour were noise
-        let every = if std::env::var_os("LOOM_STATS").is_some() { 1 } else { 60 };
+        // a line a minute (a second with LOOM_STATS=1 or `loomdebug stats`, for measuring); 4000
+        // lines an hour were noise. Counted every second, written when the line is due
         let Some(h) = self.loop_handle.clone() else { return };
-        let _ = h.insert_source(smithay::reexports::calloop::timer::Timer::from_duration(std::time::Duration::from_secs(every)), move |_, _, s: &mut Loom| {
+        let _ = h.insert_source(smithay::reexports::calloop::timer::Timer::from_duration(std::time::Duration::from_secs(1)), move |_, _, s: &mut Loom| {
+            s.stats.secs += 1;
+            let every = if s.stats_fast { 1 } else { 60 };
+            if s.stats.secs < every {
+                return smithay::reexports::calloop::timer::TimeoutAction::ToDuration(std::time::Duration::from_secs(1));
+            }
             let st = std::mem::take(&mut s.stats);
+            let every = st.secs;
             // nothing happened: no line (an idle desktop stays quiet in the log too)
             if st.frames + st.dma + st.shm > 0 {
                 let avg = if st.frames > 0 { st.render_us / st.frames as u64 } else { 0 };
@@ -1012,9 +1025,9 @@ impl Loom {
                     let by: Vec<String> = by.iter().take(3).map(|(w, n)| format!("{w} {}", per(**n))).collect();
                     if by.is_empty() { String::new() } else { format!(" ({})", by.join(", ")) }
                 };
-                eprintln!("loom: stats {} frames/s, render {:.2} ms avg {:.2} max, buffers/s {} gpu{} {} cpu{}", per(st.frames), avg as f64 / 1000.0, st.render_max_us as f64 / 1000.0, per(st.dma), top(&st.dma_by), per(st.shm), top(&st.shm_by));
+                eprintln!("loom: stats {} frames/s, render {:.2} ms avg {:.2} max, buffers/s {} gpu{} {} cpu{}, frames sent/s{}", per(st.frames), avg as f64 / 1000.0, st.render_max_us as f64 / 1000.0, per(st.dma), top(&st.dma_by), per(st.shm), top(&st.shm_by), top(&st.sent_by));
             }
-            smithay::reexports::calloop::timer::TimeoutAction::ToDuration(std::time::Duration::from_secs(every))
+            smithay::reexports::calloop::timer::TimeoutAction::ToDuration(std::time::Duration::from_secs(1))
         });
     }
 }

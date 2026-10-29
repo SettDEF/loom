@@ -425,6 +425,10 @@ impl Loom {
                     self.debug_cursor = !self.debug_cursor;
                     return format!("cursor log {}", if self.debug_cursor { "on" } else { "off" });
                 }
+                "stats" => {
+                    self.stats_fast = !self.stats_fast;
+                    return format!("stats every {}", if self.stats_fast { "second" } else { "minute" });
+                }
                 "clicks" => {
                     self.debug_clicks = !self.debug_clicks;
                     return format!("click log {}", if self.debug_clicks { "on" } else { "off" });

@@ -189,6 +189,7 @@ impl Loom {
     /// (Quickshell sent ~20 000 buffers a second, 2026-10-23).
     pub fn frames_to_output(&mut self, o: &smithay::output::Output, ms: std::time::Duration) {
         let zero = Some(std::time::Duration::ZERO);
+        let mut sent: Vec<smithay::desktop::Window> = Vec::new();
         for w in self.space.elements() {
             if !self.wants_frame(w) {
                 continue;
@@ -204,6 +205,7 @@ impl Loom {
                     }
                 }
                 w.send_frame(o, ms, zero, |_, _| Some(o.clone()));
+                sent.push(w.clone());
             }
         }
         for l in layer_map_for_output(o).layers() {
@@ -216,17 +218,20 @@ impl Loom {
         }
         // windows on hidden workspaces: a frame callback once a second (as niri), or a program
         // waiting for its next frame stalls, and Qt's unanswered requests fill its socket
+        self.count_sent(&sent);
         if self.output.as_ref() == Some(o) && self.hidden_frames_at.elapsed() >= std::time::Duration::from_secs(1) {
             self.hidden_frames_at = std::time::Instant::now();
             let hidden: Vec<smithay::desktop::Window> = self.managed.iter().filter(|m| self.space.element_location(&m.window).is_none()).map(|m| m.window.clone()).collect();
             for w in hidden {
                 w.send_frame(o, ms, zero, |_, _| Some(o.clone()));
+                sent.push(w.clone());
             }
         }
     }
 
     pub fn frames_to_all(&mut self, ms: std::time::Duration) {
         let zero = Some(std::time::Duration::ZERO);
+        let mut sent: Vec<smithay::desktop::Window> = Vec::new();
         for w in self.space.elements() {
             if !self.wants_frame(w) {
                 continue;
@@ -242,6 +247,7 @@ impl Loom {
                     }
                 }
                 w.send_frame(&o, ms, zero, |_, _| Some(o.clone()));
+                sent.push(w.clone());
             }
         }
         for o in &self.outputs {
@@ -253,6 +259,21 @@ impl Loom {
         if let Some(o) = self.output.clone() {
             self.lock_frame(&o, ms);
             self.cursor_frame(&o, ms);
+        }
+        self.count_sent(&sent);
+    }
+
+    /// The stats line's frame callbacks per program (`loomdebug stats`).
+    fn count_sent(&mut self, sent: &[smithay::desktop::Window]) {
+        if !self.stats_on {
+            return;
+        }
+        for w in sent {
+            let name = smithay::wayland::seat::WaylandFocus::wl_surface(w)
+                .and_then(|s| smithay::reexports::wayland_server::Resource::client(&*s))
+                .and_then(|c| self.stats.names.get(&c.id()).cloned())
+                .unwrap_or_else(|| if w.x11_surface().is_some() { "X".into() } else { "?".into() });
+            *self.stats.sent_by.entry(name).or_default() += 1;
         }
     }
 
