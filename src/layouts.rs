@@ -138,8 +138,9 @@ fn spiral(n: usize, a: B, s: &Suit, is_spiral: bool) -> Vec<B> {
     let mut out = Vec::new();
     let mut rest = a;
     for i in 1..=n {
-        if i == n {
-            out.push(rest);
+        // the last, or too little left to halve: the rest share it (halving on gave 0-px windows)
+        if i == n || rest.w < 2 || rest.h < 2 {
+            out.extend(std::iter::repeat_n(rest, n + 1 - i));
             break;
         }
         let k = (i - 1) % 4;
@@ -382,5 +383,50 @@ mod tests {
         assert!((l.of("1").mwfact - 0.6).abs() < 1e-9);
         assert!(l.message("1", "nonsense").is_err());
         assert_eq!(l.of("2").suit, "tile", "another workspace keeps its own");
+    }
+
+    #[test]
+    fn every_layout_fills_its_area_without_overlap() {
+        let shapes = [(1600, 1000), (1080, 1920), (3440, 1440), (300, 200)];
+        let suits = [Suit::default(), Suit { nmaster: 2, ncol: 3, ..Suit::default() }, Suit { mwfact: 0.95, ..Suit::default() }, Suit { nmaster: 0, ..Suit::default() }];
+        let mut bad = vec![];
+        for (w, h) in shapes {
+            let a = Rectangle::new((10, 20).into(), (w, h).into());
+            for base in &suits {
+                for suit in SUITS {
+                    let st = Suit { suit: suit.into(), ..base.clone() };
+                    for n in 1..=12 {
+                        let r = arrange(n, a, &st);
+                        let tag = format!("{suit} n={n} {w}x{h} nmaster={} ncol={} mwfact={}", st.nmaster, st.ncol, st.mwfact);
+                        if r.len() != n {
+                            bad.push(format!("{tag}: {} boxes", r.len()));
+                        }
+                        for x in &r {
+                            if x.size.w < 1 || x.size.h < 1 || x.loc.x < a.loc.x || x.loc.y < a.loc.y || x.loc.x + x.size.w > a.loc.x + w || x.loc.y + x.size.h > a.loc.y + h {
+                                bad.push(format!("{tag}: {x:?} outside or empty"));
+                            }
+                        }
+                        // max and center overlap on purpose; so do the spiral's last ones once there is no room to halve
+                        if suit == "max" || suit == "center" || r.iter().any(|x| x.size.w < 2 || x.size.h < 2) {
+                            continue;
+                        }
+                        let mut area = 0i64;
+                        for (i, x) in r.iter().enumerate() {
+                            area += x.size.w as i64 * x.size.h as i64;
+                            for y in &r[i + 1..] {
+                                if x.overlaps(*y) {
+                                    bad.push(format!("{tag}: {x:?} overlaps {y:?}"));
+                                }
+                            }
+                        }
+                        if area != w as i64 * h as i64 {
+                            bad.push(format!("{tag}: covers {area} of {}", w as i64 * h as i64));
+                        }
+                    }
+                }
+            }
+        }
+        bad.dedup();
+        assert!(bad.is_empty(), "{} problems, first: {:#?}", bad.len(), &bad[..bad.len().min(12)]);
     }
 }
