@@ -119,9 +119,11 @@ impl Dispatch<ZwlrScreencopyManagerV1, ()> for Loom {
         }
         f.buffer(wl_shm::Format::Argb8888, rect.size.w as u32, rect.size.h as u32, rect.size.w as u32 * 4);
         if f.version() >= 3 {
-            // on the GPU a GPU buffer may come instead, drawn straight into (portals, OBS). Opt-in for now
-            // (LOOM_SCREENCOPY_DMABUF=1): wf-recorder with VA-API stalls after ~17 frames on it (2026-10-22)
-            if (state.gpu.is_some() || state.nested.is_some()) && std::env::var("LOOM_SCREENCOPY_DMABUF").is_ok_and(|v| v == "1") {
+            // on the GPU a GPU buffer may come instead, drawn straight into (portals, OBS). On by default:
+            // xdg-desktop-portal-hyprland needs it (without it no stream: "Couldn't obtain a format from
+            // dma", so no screen sharing in Discord or browsers; checked headless 2026-10-29). Off with
+            // LOOM_SCREENCOPY_DMABUF=0 (wf-recorder with VA-API stalled after ~17 frames on it, 2026-10-22)
+            if (state.gpu.is_some() || state.nested.is_some()) && std::env::var("LOOM_SCREENCOPY_DMABUF").map_or(true, |v| v != "0") {
                 f.linux_dmabuf(smithay::backend::allocator::Fourcc::Xrgb8888 as u32, rect.size.w as u32, rect.size.h as u32);
             }
             f.buffer_done();
