@@ -221,12 +221,16 @@ impl Loom {
                 s.cursors.clear();
             }
         }
-        if let (Some(n), Some(t)) = (self.x.client.as_ref().and(self.x_display), theme) {
+        // X told too, once Xwayland is up (its window manager running), and never waited for: xrdb
+        // talks to Xwayland, which may be waiting for loom (a login's scripts rewrite KDE's file
+        // while Xwayland starts): waiting here froze the whole session at login. The reaper
+        // collects it
+        if let (Some(n), Some(t), true) = (self.x_display, theme, self.xwm.is_some()) {
             let res = format!("Xcursor.theme: {t}\nXcursor.size: {}\n", base.round() as u32);
-            if let Ok(mut c) = std::process::Command::new("xrdb").arg("-merge").env("DISPLAY", format!(":{n}")).stdin(std::process::Stdio::piped()).spawn() {
+            if let Ok(mut c) = std::process::Command::new("xrdb").arg("-merge").env("DISPLAY", format!(":{n}")).stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn() {
                 use std::io::Write;
+                // a few bytes into an empty pipe: written at once, then closed
                 let _ = c.stdin.take().map(|mut i| i.write_all(res.as_bytes()));
-                let _ = c.wait();
             }
         }
         self.dirty = true;
