@@ -517,6 +517,8 @@ impl Loom {
         if let Some(n) = own.or(self.x_display) {
             c.env("DISPLAY", format!(":{n}"));
         }
+        // the cursor KDE's settings chose
+        c.env("XCURSOR_THEME", crate::tty::cursor_theme()).env("XCURSOR_SIZE", (crate::tty::cursor_base().round() as u32).to_string());
         let ch = c.spawn().ok()?;
         let pid = ch.id();
         self.keep_child(ch);

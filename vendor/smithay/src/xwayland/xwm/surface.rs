@@ -395,7 +395,6 @@ impl X11Surface {
         self.state.lock().unwrap().normal_hints
     }
 
-    /// Returns the suggested minimum size of the underlying X11 window
     /// loom: this window's X pixels taken as logical pixels (drawn at scale 1, enlarged by the
     /// screen's scale), for a program that cannot scale itself (a plugin's window)
     pub fn set_lifted(&self, on: bool) {
@@ -409,6 +408,7 @@ impl X11Surface {
         self.coords.as_ref().is_some_and(|c| c.lift.load(std::sync::atomic::Ordering::Relaxed))
     }
 
+    /// Returns the suggested minimum size of the underlying X11 window
     pub fn min_size(&self) -> Option<Size<i32, Logical>> {
         let state = self.state.lock().unwrap();
         let at = state.geometry;

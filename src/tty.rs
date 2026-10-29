@@ -181,9 +181,69 @@ fn edid_name(edid: &[u8]) -> Option<String> {
     })
 }
 
-/// The theme's default arrow (XCURSOR_THEME, else "default") at `size` pixels, ARGB, and its hotspot.
+/// The cursor theme and size KDE's settings chose (~/.config/kcminputrc, [Mouse]), if any.
+pub fn kde_cursor() -> (Option<String>, Option<u32>) {
+    let Ok(t) = std::fs::read_to_string(crate::config::home().join(".config/kcminputrc")) else { return (None, None) };
+    let mut mouse = false;
+    let (mut theme, mut size) = (None, None);
+    for l in t.lines().map(str::trim) {
+        if l.starts_with('[') {
+            mouse = l == "[Mouse]";
+        } else if mouse {
+            if let Some(v) = l.strip_prefix("cursorTheme=") {
+                theme = Some(v.to_string()).filter(|v| !v.is_empty());
+            } else if let Some(v) = l.strip_prefix("cursorSize=") {
+                size = v.parse().ok();
+            }
+        }
+    }
+    (theme, size)
+}
+
+impl Loom {
+    /// The cursor from KDE's settings (at start and when they change): loom's own arrows reloaded on
+    /// every screen, and the theme passed on to programs started later (XCURSOR_THEME/SIZE, X's
+    /// Xcursor resources). Before, loom read XCURSOR_THEME once and KDE's choice did nothing.
+    pub fn cursor_theme_apply(&mut self) {
+        let (theme, size) = kde_cursor();
+        *CURSOR.write().unwrap() = (theme.clone(), size);
+        let base = cursor_base();
+        if let Some(t) = self.tty.as_mut() {
+            for s in t.screens.iter_mut() {
+                let px = (base * s.output.current_scale().fractional_scale()).round() as u32;
+                s.cursor_px = px;
+                s.cursor = load_cursor("default", px);
+                s.cursors.clear();
+            }
+        }
+        if let (Some(n), Some(t)) = (self.x.client.as_ref().and(self.x_display), theme) {
+            let res = format!("Xcursor.theme: {t}\nXcursor.size: {}\n", base.round() as u32);
+            if let Ok(mut c) = std::process::Command::new("xrdb").arg("-merge").env("DISPLAY", format!(":{n}")).stdin(std::process::Stdio::piped()).spawn() {
+                use std::io::Write;
+                let _ = c.stdin.take().map(|mut i| i.write_all(res.as_bytes()));
+                let _ = c.wait();
+            }
+        }
+        self.dirty = true;
+    }
+}
+
+/// KDE's cursor theme and size, when its settings name them (over XCURSOR_THEME/SIZE).
+static CURSOR: std::sync::RwLock<(Option<String>, Option<u32>)> = std::sync::RwLock::new((None, None));
+
+/// The cursor theme: KDE's, else XCURSOR_THEME, else "default".
+pub fn cursor_theme() -> String {
+    CURSOR.read().unwrap().0.clone().or_else(|| std::env::var("XCURSOR_THEME").ok()).unwrap_or_else(|| "default".into())
+}
+
+/// The cursor size asked for: KDE's, else XCURSOR_SIZE, else 24.
+pub fn cursor_base() -> f64 {
+    CURSOR.read().unwrap().1.map(f64::from).or_else(|| std::env::var("XCURSOR_SIZE").ok().and_then(|v| v.parse().ok())).unwrap_or(24.0)
+}
+
+/// The theme's default arrow (cursor_theme()) at `size` pixels, ARGB, and its hotspot.
 fn load_cursor(name: &str, size: u32) -> Option<(MemoryRenderBuffer, (i32, i32))> {
-    let theme = std::env::var("XCURSOR_THEME").unwrap_or_else(|_| "default".into());
+    let theme = cursor_theme();
     // the name or one of its old X names in the theme (Oxygen has closedhand, not grabbing), else in Adwaita, else the arrow
     let icon = name.parse::<smithay::input::pointer::CursorIcon>().ok();
     let names: Vec<&str> = std::iter::once(name).chain(icon.iter().flat_map(|i| i.alt_names().iter().copied())).collect();
@@ -203,6 +263,9 @@ pub fn run(opts: Options) -> Result<(), Box<dyn std::error::Error>> {
     state.init_idle();
     // init.lua applied when it changes
     state.watch_config();
+    // KDE's cursor choice, before the screens load their arrows, and when it changes
+    state.cursor_theme_apply();
+    state.watch_kde_cursor();
 
     // an older loom session on another console: ended first (restarting is just starting again)
     end_other_looms();
@@ -456,10 +519,10 @@ impl Loom {
                     CursorImageStatus::Surface(s) => {
                         let hot = smithay::wayland::compositor::with_states(s, |st| st.data_map.get::<smithay::input::pointer::CursorImageSurfaceData>().map(|d| d.lock().unwrap().hotspot)).unwrap_or_default();
                         // an X program's cursor (Bitwig) comes in X pixels, which are this screen's own pixels
-                        // (xscreens.rs): drawn 1:1, a small one grown to the theme arrow's size (24 or XCURSOR_SIZE)
+                        // (xscreens.rs): drawn 1:1, a small one grown to the theme arrow's size (cursor_base())
                         let from_x = smithay::reexports::wayland_server::Resource::client(s).is_some_and(|c| self.x.client.as_ref().is_some_and(|x| x.id() == c.id()));
                         let scale = if from_x {
-                            let want = std::env::var("XCURSOR_SIZE").ok().and_then(|v| v.parse::<f64>().ok()).unwrap_or(24.0) * os;
+                            let want = cursor_base() * os;
                             let h = smithay::backend::renderer::utils::with_renderer_surface_state(s, |st| st.surface_size().map(|z| z.h as f64)).flatten().unwrap_or(want);
                             (want / h.max(1.0)).max(1.0)
                         } else {
@@ -750,9 +813,9 @@ impl Loom {
             vrr: rule.map(|r| r.vrr).unwrap_or(0),
             vrr_can,
             vrr_on: false,
-            cursor: load_cursor("default", (24.0 * scale).round() as u32),
+            cursor: load_cursor("default", (cursor_base() * scale).round() as u32),
             cursors: Default::default(),
-            cursor_px: (24.0 * scale).round() as u32,
+            cursor_px: (cursor_base() * scale).round() as u32,
         });
         // where it goes: the rule's place, else right of the others
         let at = match rule.and_then(|r| r.pos) {

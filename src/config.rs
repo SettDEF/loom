@@ -248,6 +248,28 @@ impl crate::state::Loom {
         });
     }
 
+    /// KDE's settings watched for the cursor theme (kcminputrc): on their own, so other files in
+    /// ~/.config are no config change.
+    pub fn watch_kde_cursor(&mut self) {
+        use inotify::{Inotify, WatchMask};
+        let Ok(ino) = Inotify::init() else { return };
+        if ino.watches().add(home().join(".config"), WatchMask::CLOSE_WRITE | WatchMask::MOVED_TO).is_err() {
+            return;
+        }
+        let Some(h) = self.loop_handle.clone() else { return };
+        let src = smithay::reexports::calloop::generic::Generic::new(ino, smithay::reexports::calloop::Interest::READ, smithay::reexports::calloop::Mode::Level);
+        let _ = h.insert_source(src, |_, ino, state: &mut crate::state::Loom| {
+            let mut buf = [0u8; 4096];
+            // Safety: the inotify fd is not dropped while the source lives
+            let ino = unsafe { ino.get_mut() };
+            let hit = ino.read_events(&mut buf).map(|evs| evs.into_iter().any(|e| e.name.is_some_and(|n| n == "kcminputrc"))).unwrap_or(false);
+            if hit {
+                state.cursor_theme_apply();
+            }
+            Ok(smithay::reexports::calloop::PostAction::Continue)
+        });
+    }
+
     /// A reload soon: the saves of one moment (an editor, the shell writing several files) become one.
     pub fn schedule_reload(&mut self) {
         if std::mem::replace(&mut self.reload_pending, true) {
