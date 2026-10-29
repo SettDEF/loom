@@ -168,7 +168,20 @@ impl Loom {
                     return;
                 }
                 let forward = (along < 0.0) == self.gesture_cfg.invert;
-                let n = if forward { self.active_ws + 1 } else { (self.active_ws - 1).max(1) };
+                // the next one this screen can show: one the other screen shows is skipped (the swipe
+                // went there and took the focus to the other screen)
+                let here = self.output.as_ref().map(|o| o.name());
+                let elsewhere = |k: i32| self.shown_on.iter().any(|(o, v)| *v == k && Some(o) != here.as_ref());
+                let mut n = self.active_ws;
+                loop {
+                    n = if forward { n + 1 } else { n - 1 };
+                    if n < 1 {
+                        return;
+                    }
+                    if !elsewhere(n) {
+                        break;
+                    }
+                }
                 if !self.gesture_cfg.create_new && !self.workspace_ids().contains(&n) {
                     return;
                 }
