@@ -167,8 +167,11 @@ impl Loom {
         if consume {
             return;
         }
-        // a title bar or button pill (ii-decor) takes the click before the program under it
-        if self.decor_button(pressed, button, time) {
+        // a title bar or button pill (ii-decor) takes the click before the program under it; a
+        // release only when the bar had the press (the press went to a notification swiped away
+        // over the bar: its release clicked the bar's button)
+        let bar_had_press = self.decor.borrow().pressed.is_some();
+        if (pressed || bar_had_press) && self.decor_button(pressed, button, time) {
             if self.debug_clicks {
                 eprintln!("loom: click taken by the title bar (drag now {})", self.drag.is_some());
             }

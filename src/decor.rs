@@ -522,11 +522,20 @@ impl crate::state::Loom {
     /// The bar or pill under `at`: its window, the button there (None: the bar itself), and
     /// where the bar is. Topmost window first.
     pub fn decor_at(&self, at: smithay::utils::Point<f64, smithay::utils::Logical>) -> Option<(smithay::desktop::Window, Option<String>)> {
+        // a layer over it there (a notification, a panel) has the pointer, not the bar under it: a
+        // notification swiped away over Bitwig's title bar dragged Bitwig
+        if self.surface_at(at).is_some_and(|(s, _)| self.layer_output_of(&s).is_some()) {
+            return None;
+        }
         for w in self.space.elements().rev() {
             let Some(loc) = self.space.element_location(w) else { continue };
+            // a window higher up whose content is there (not one of its own bar's buttons) covers the
+            // bars under it
+            let covers = smithay::desktop::space::SpaceElement::is_in_input_region(w, &(at - loc.to_f64()));
             let size = w.geometry().size;
             let kind = self.decor_kind(w);
             let (bx, by, bw, bh, ov) = match &kind {
+                Kind::None if covers => return None,
                 Kind::None => continue,
                 Kind::Bar(h) => (loc.x as f64, loc.y as f64 - *h as f64, size.w as f64, *h as f64, None),
                 Kind::Overlay(o) => {
@@ -537,6 +546,9 @@ impl crate::state::Loom {
                 }
             };
             if at.x < bx || at.y < by || at.x >= bx + bw || at.y >= by + bh {
+                if covers {
+                    return None;
+                }
                 continue;
             }
             let (rx, ry) = ((at.x - bx) as f32, (at.y - by) as f32);
@@ -545,6 +557,9 @@ impl crate::state::Loom {
             let hit = layout(&self.decor.borrow().conf, bw as f32, bh as f32, ov.as_ref()).into_iter().find(|b| rx >= b.x - slack && rx < b.x + b.size + slack && ry >= b.y - slack && ry < b.y + b.size + slack).map(|b| b.id);
             if ov.is_some() && hit.is_none() {
                 // a pill only takes its buttons; the rest of it is the app's content
+                if covers {
+                    return None;
+                }
                 continue;
             }
             return Some((w.clone(), hit));
