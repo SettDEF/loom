@@ -27,7 +27,7 @@ impl Loom {
         }
         let here: Vec<_> = self.managed.iter().filter(|m| m.ws == ws).map(|m| m.window.clone()).collect();
         for w in here {
-            self.space.map_element(w, (0, 0), false);
+            self.show_window(&w, false);
         }
         eprintln!("loom: screen {} at {},{} shows workspace {ws}", o.name(), at.x, at.y);
         self.hypr_event(&format!("monitoradded>>{}", o.name()));
@@ -60,11 +60,15 @@ impl Loom {
         if let Some(ws) = shown {
             let here: Vec<_> = self.managed.iter().filter(|m| m.ws == ws).map(|m| m.window.clone()).collect();
             for w in here {
-                self.space.unmap_elem(&w);
+                self.hide_window(&w);
             }
         }
         if let Some(f) = self.output.clone() {
             self.active_ws = self.shown_on.get(&f.name()).copied().unwrap_or(1);
+        }
+        // the focus was on a window of that screen: it is hidden now, so keys went to nothing visible
+        if self.focused.as_ref().and_then(|w| self.managed_of(w)).is_some_and(|m| !self.is_shown(m.ws)) {
+            self.focus_next(self.active_ws);
         }
         eprintln!("loom: screen {name} gone");
         self.hypr_event(&format!("monitorremoved>>{name}"));
@@ -294,12 +298,12 @@ impl Loom {
             self.ws_on.insert(free, f);
             let here: Vec<_> = self.managed.iter().filter(|m| m.ws == free).map(|m| m.window.clone()).collect();
             for w in here {
-                self.space.map_element(w, (0, 0), false);
+                self.show_window(&w, false);
             }
         }
         let here: Vec<_> = self.managed.iter().filter(|m| m.ws == n).map(|m| m.window.clone()).collect();
         for w in here {
-            self.space.map_element(w, (0, 0), false);
+            self.show_window(&w, false);
         }
         if let Some(f) = self.output.clone() {
             self.active_ws = self.shown_on.get(&f.name()).copied().unwrap_or(self.active_ws);

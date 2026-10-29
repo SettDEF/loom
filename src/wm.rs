@@ -265,12 +265,9 @@ impl Loom {
             self.pointer_to_middle(&o);
         }
         let existed = self.workspace_ids().contains(&n);
-        for m in self.managed.iter_mut().filter(|m| m.ws == self.active_ws && !m.pinned) {
-            if let Some(at) = self.space.element_location(&m.window) {
-                m.last_at = at;
-            }
-            self.space.unmap_elem(&m.window);
-            suspend(&m.window, true);
+        let leaving: Vec<Window> = self.managed.iter().filter(|m| m.ws == self.active_ws && !m.pinned).map(|m| m.window.clone()).collect();
+        for w in &leaving {
+            self.hide_window(w);
         }
         let old = self.active_ws;
         self.active_ws = n;
@@ -284,8 +281,7 @@ impl Loom {
         }
         let here: Vec<Window> = self.managed.iter().filter(|m| m.ws == n).map(|m| m.window.clone()).collect();
         for w in &here {
-            self.space.map_element(w.clone(), (0, 0), false);
-            suspend(w, false);
+            self.show_window(w, false);
         }
         self.relayout();
         self.focus_shown(n);
@@ -332,10 +328,7 @@ impl Loom {
         }
         let addr = m.addr;
         if self.is_shown(n) {
-            if self.space.element_location(w).is_none() {
-                self.space.map_element(w.clone(), (0, 0), false);
-            }
-            suspend(w, false);
+            self.show_window(w, false);
         } else {
             self.space.unmap_elem(w);
             suspend(w, true);
@@ -352,12 +345,38 @@ impl Loom {
     /// swapmaster: the focused window first on its workspace (the master slot).
     pub fn swap_master(&mut self) {
         let Some(w) = self.focused.clone() else { return };
-        let ws = self.active_ws;
+        // a floating one is no tile: swapped in, the master dropped to last; and the window's own
+        // workspace, not the focused screen's
+        let Some(ws) = self.managed_of(&w).filter(|m| !m.floating).map(|m| m.ws) else { return };
         let first = self.managed.iter().position(|m| m.ws == ws && !m.floating);
         let me = self.managed.iter().position(|m| m.window == w);
         if let (Some(a), Some(b)) = (first, me) {
             self.managed.swap(a, b);
         }
+    }
+
+    /// A window shown (its workspace came on screen): where it is if it is shown already (a pinned
+    /// one), a floating one where it last was, a tiled one anywhere (the tiling places it); and woken.
+    /// Every path that shows windows goes through here: they were all put at 0,0, and floating ones
+    /// stayed there (top left of the first screen) after every workspace switch.
+    pub fn show_window(&mut self, w: &Window, raise: bool) {
+        if self.space.element_location(w).is_none() {
+            let at = self.managed_of(w).filter(|m| m.floating).map(|m| m.last_at).unwrap_or_default();
+            self.space.map_element(w.clone(), at, raise);
+        }
+        suspend(w, false);
+    }
+
+    /// A window hidden (its workspace left the screen): where it was kept for show_window, then
+    /// paused. Some paths only unmapped and left it running, or never woke it again.
+    pub fn hide_window(&mut self, w: &Window) {
+        if let Some(at) = self.space.element_location(w) {
+            if let Some(m) = self.managed.iter_mut().find(|m| &m.window == w) {
+                m.last_at = at;
+            }
+        }
+        self.space.unmap_elem(w);
+        suspend(w, true);
     }
 
     /// The focus on a workspace just shown: on a center one its master (it floats over the rest; the
@@ -614,9 +633,9 @@ impl Loom {
         let here: Vec<Window> = self.managed.iter().filter(|m| m.ws == SPECIAL).map(|m| m.window.clone()).collect();
         for w in &here {
             if self.special_shown {
-                self.space.map_element(w.clone(), (0, 0), true);
+                self.show_window(w, true);
             } else {
-                self.space.unmap_elem(w);
+                self.hide_window(w);
             }
         }
         self.relayout();

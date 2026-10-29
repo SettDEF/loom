@@ -316,6 +316,8 @@ impl Loom {
                 if let Some(w) = self.focused.clone() {
                     if let Some(m) = self.managed.iter_mut().find(|m| m.window == w) {
                         m.floating = !m.floating;
+                        // pinned is for floating ones: a tile pinned went along to every workspace
+                        m.pinned &= m.floating;
                     }
                     self.relayout();
                 }
@@ -411,6 +413,7 @@ impl Loom {
                 let float = d == "setfloating";
                 if let Some(m) = self.managed.iter_mut().find(|m| m.window == w) {
                     m.floating = float;
+                    m.pinned &= float;
                 }
                 self.relayout();
             }
