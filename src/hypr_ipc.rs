@@ -429,7 +429,30 @@ impl Loom {
                     self.debug_clicks = !self.debug_clicks;
                     return format!("click log {}", if self.debug_clicks { "on" } else { "off" });
                 }
-                _ => return "loomdebug cursor | clicks".into(),
+                // a screen unplugged and plugged back, without a real one (headless, nested only)
+                u if u.starts_with("unplug ") || u.starts_with("replug ") => {
+                    if self.tty.is_some() {
+                        return "unplug/replug: headless and nested only".into();
+                    }
+                    let name = u[7..].trim().to_string();
+                    if u.starts_with("unplug ") {
+                        let Some(o) = self.output_named(&name) else { return format!("no screen {name}") };
+                        let at = self.space.output_geometry(&o).map(|g| g.loc).unwrap_or_default();
+                        self.remove_output(&name);
+                        if let Some(g) = self.output_globals.remove(&name) {
+                            self.dh.remove_global::<Loom>(g);
+                        }
+                        self.parked.push((o, at));
+                        return format!("{name} unplugged");
+                    }
+                    let Some(i) = self.parked.iter().position(|(o, _)| o.name() == name) else { return format!("{name} is not unplugged") };
+                    let (o, at) = self.parked.remove(i);
+                    let g = o.create_global::<Loom>(&self.dh);
+                    self.output_globals.insert(name.clone(), g);
+                    self.add_output(o, at);
+                    return format!("{name} back");
+                }
+                _ => return "loomdebug cursor | clicks | unplug NAME | replug NAME".into(),
             },
             // loom's own: the new binary in place, the session kept (restart.rs)
             "loomrestart" => {

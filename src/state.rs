@@ -68,6 +68,13 @@ pub struct Loom {
     /// which workspace each screen shows (by screen name), and which screen each workspace belongs to
     pub shown_on: std::collections::HashMap<String, i32>,
     pub ws_on: std::collections::HashMap<i32, String>,
+    /// a screen unplugged: its workspaces (moved to another meanwhile) and the one it showed, so they
+    /// go back when it returns (they stayed on the other screen)
+    pub ws_home: std::collections::HashMap<i32, String>,
+    pub shown_before: std::collections::HashMap<String, i32>,
+    /// headless/nested: screens unplugged by `loomdebug unplug`, with where they were
+    pub parked: Vec<(smithay::output::Output, smithay::utils::Point<i32, smithay::utils::Logical>)>,
+    pub output_globals: std::collections::HashMap<String, smithay::reexports::wayland_server::backend::GlobalId>,
     /// every window with its workspace and address (wm.rs); the workspace shown; the focused one
     pub managed: Vec<crate::wm::Managed>,
     pub next_addr: u64,
@@ -273,6 +280,10 @@ impl Loom {
             outputs: Vec::new(),
             shown_on: Default::default(),
             ws_on: Default::default(),
+            ws_home: Default::default(),
+            shown_before: Default::default(),
+            parked: Vec::new(),
+            output_globals: Default::default(),
             managed: Vec::new(),
             next_addr: 0,
             active_ws: 1,

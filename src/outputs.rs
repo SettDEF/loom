@@ -18,7 +18,33 @@ impl Loom {
         o.change_current_state(None, None, None, Some(at));
         self.outputs.push(o.clone());
         self.kde_outputs_changed();
-        let ws = if self.shown_on.is_empty() { self.active_ws } else { (1..).find(|n| !self.shown_on.values().any(|v| v == n) && self.ws_on.get(n).is_none_or(|m| *m == o.name())).unwrap_or(1) };
+        // a screen coming back: its own workspaces return to it (from the screen that held them)
+        let mine: Vec<i32> = self.ws_home.iter().filter(|(_, n)| **n == o.name()).map(|(ws, _)| *ws).collect();
+        for ws in &mine {
+            self.ws_home.remove(ws);
+            self.ws_on.insert(*ws, o.name());
+        }
+        // one of them shown on the other screen meanwhile: that screen shows another of its own
+        for ws in &mine {
+            if let Some(other) = self.shown_on.iter().find(|(_, v)| *v == ws).map(|(k, _)| k.clone()) {
+                let free = (1..).find(|k| !mine.contains(k) && !self.shown_on.values().any(|v| v == k) && self.ws_on.get(k).is_none_or(|m| *m == other)).unwrap_or(1);
+                self.shown_on.insert(other.clone(), free);
+                self.ws_on.insert(free, other.clone());
+                let leaving: Vec<_> = self.managed.iter().filter(|m| m.ws == *ws).map(|m| m.window.clone()).collect();
+                for w in &leaving {
+                    self.hide_window(w);
+                }
+                let coming: Vec<_> = self.managed.iter().filter(|m| m.ws == free).map(|m| m.window.clone()).collect();
+                for w in &coming {
+                    self.show_window(w, false);
+                }
+                if self.output.as_ref().is_some_and(|f| f.name() == other) {
+                    self.active_ws = free;
+                }
+            }
+        }
+        let before = self.shown_before.remove(&o.name()).filter(|ws| !self.shown_on.values().any(|v| v == ws));
+        let ws = if self.shown_on.is_empty() { self.active_ws } else { before.unwrap_or_else(|| (1..).find(|n| !self.shown_on.values().any(|v| v == n) && self.ws_on.get(n).is_none_or(|m| *m == o.name())).unwrap_or(1)) };
         self.shown_on.insert(o.name(), ws);
         self.ws_on.insert(ws, o.name());
         if self.output.is_none() {
@@ -49,6 +75,15 @@ impl Loom {
         }
         self.space.unmap_output(&o);
         let shown = self.shown_on.remove(name);
+        // remembered for its return: what it showed and which workspaces were its own
+        if let Some(ws) = shown {
+            self.shown_before.insert(name.to_string(), ws);
+        }
+        for (ws, on) in &self.ws_on {
+            if on == name {
+                self.ws_home.insert(*ws, name.to_string());
+            }
+        }
         if self.output.as_ref() == Some(&o) {
             self.output = self.outputs.first().cloned();
         }

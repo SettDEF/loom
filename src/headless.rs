@@ -86,7 +86,8 @@ pub fn run(opts: Options) -> Result<(), Box<dyn std::error::Error>> {
     // the output
     let (w, h) = opts.size;
     let output = Output::new("HEADLESS-1".into(), PhysicalProperties { size: (0, 0).into(), subpixel: Subpixel::Unknown, make: "loom".into(), model: "headless".into() });
-    let _global = output.create_global::<Loom>(&state.dh);
+    let global = output.create_global::<Loom>(&state.dh);
+    state.output_globals.insert(output.name(), global);
     let mode = Mode { size: (w, h).into(), refresh: 60_000 };
     // the scale the real screen would have (--scale 1.6: the Z13 panel), logical size = pixels / scale
     let scale = if (opts.scale - 1.0).abs() < 1e-6 { Scale::Integer(1) } else { Scale::Fractional(opts.scale) };
@@ -97,7 +98,8 @@ pub fn run(opts: Options) -> Result<(), Box<dyn std::error::Error>> {
     let mut x = (w as f64 / opts.scale).round() as i32;
     for (i, &(mw, mh)) in opts.more.iter().enumerate() {
         let o = Output::new(format!("HEADLESS-{}", i + 2), PhysicalProperties { size: (0, 0).into(), subpixel: Subpixel::Unknown, make: "loom".into(), model: "headless".into() });
-        let _ = o.create_global::<Loom>(&state.dh);
+        let g = o.create_global::<Loom>(&state.dh);
+        state.output_globals.insert(o.name(), g);
         let m = Mode { size: (mw, mh).into(), refresh: 60_000 };
         o.change_current_state(Some(m), Some(Transform::Normal), Some(Scale::Integer(1)), None);
         o.set_preferred(m);
