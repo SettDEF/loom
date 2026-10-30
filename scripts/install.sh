@@ -25,7 +25,14 @@ echo "installed loom, loom-x, loom-session in $B"
 S=${XDG_DATA_HOME:-$HOME/.local/share}/loom/loom.desktop
 mkdir -p "$(dirname "$S")"
 sed "s|@HOME@|$HOME|g" dist/loom.desktop > "$S"
+# into the login screen's list here (root: sudo asks once, only when it is missing or out of date);
+# without a terminal to ask in, the command is printed instead
 if ! cmp -s "$S" /usr/share/wayland-sessions/loom.desktop; then
-  echo "for the login screen's session list (once, needs root):"
-  echo "  sudo install -m 644 $S /usr/share/wayland-sessions/loom.desktop"
+  if [ -t 0 ] && command -v sudo >/dev/null 2>&1 \
+      && sudo install -Dm 644 "$S" /usr/share/wayland-sessions/loom.desktop; then
+    echo "installed the session entry: loom is in the login screen's list"
+  else
+    echo "for the login screen's session list (once, needs root):"
+    echo "  sudo install -Dm 644 $S /usr/share/wayland-sessions/loom.desktop"
+  fi
 fi

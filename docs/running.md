@@ -66,7 +66,7 @@ loom as the whole session, picked on the login screen (GDM), like Hyprland:
 
 ```sh
 scripts/install.sh      # loom, loom-x, loom-session into ~/.local/bin
-sudo install -m 644 ~/.local/share/loom/loom.desktop /usr/share/wayland-sessions/loom.desktop   # once (install.sh writes it with your home)
+# install.sh also puts the session entry (with your home) in the login screen's list: sudo asks once
 ```
 
 Then log out and pick **loom** under the gear on the login screen. `loom-session` runs
