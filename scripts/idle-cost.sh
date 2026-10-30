@@ -2,6 +2,7 @@
 # idle-cost.sh: what loom costs while nothing happens (wakeups and CPU over 10 s, one idle terminal)
 # The battery budget: an idle desktop must stay at 0 wakeups/s. Usage: scripts/idle-cost.sh [loom-binary]
 L=${1:-/mnt/storage/dev-cache/targets/release/loom}
+[ -x "$L" ] || L=$HOME/.local/bin/loom   # another machine: the installed one
 H=$(mktemp -d)
 env -u ZEIT -u ZEIT_PANE HOME=$H LIBGL_ALWAYS_SOFTWARE=1 "$L" --headless --size 960x540 --socket loom-idle-$$ --wait 16000 -- alacritty -e sh -c 'sleep 30' >/dev/null 2>&1 &
 P=$!

@@ -6,6 +6,7 @@
 set -eu
 cd "$(dirname "$0")/.."
 T=${LOOM_BIN:-${CARGO_TARGET_DIR:-/mnt/storage/dev/cargo-target/loom}/release}
+[ -d "$T" ] || T=target/release   # another machine: cargo's own target/
 ME=$(id -un)
 
 if [ "${1:-}" = "--uninstall" ]; then

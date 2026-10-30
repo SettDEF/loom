@@ -4,6 +4,7 @@
 set -u
 cd "$(dirname "$0")/.." || exit 1
 T=${LOOM_BIN:-/mnt/storage/dev/cargo-target/loom/release}
+[ -d "$T" ] || T=$HOME/.local/bin   # another machine: the installed loom, loom-x
 ROUNDS=${1:-3}
 OUT=$(mktemp -d)
 trap 'rm -rf "${OUT:?}"' EXIT
