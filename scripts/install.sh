@@ -3,7 +3,10 @@
 # Usage: scripts/install.sh   (LOOM_BIN = the release build; default: where cargo builds, $CARGO_TARGET_DIR/release)
 set -eu
 cd "$(dirname "$0")/.."
-T=${LOOM_BIN:-${CARGO_TARGET_DIR:-/mnt/storage/dev/cargo-target/loom}/release}
+# (/mnt/storage is one machine's data disk: elsewhere cargo's own target/)
+D=/mnt/storage/dev/cargo-target/loom
+[ -d "$D" ] || D=target
+T=${LOOM_BIN:-${CARGO_TARGET_DIR:-$D}/release}
 # a build older than the source is not what was just built (a stale target folder): refused
 # only what the loom binary is built from (src/bin/* are other programs; dist/greeter is built in)
 newest=$(find src dist/greeter Cargo.toml -newer "$T/loom" -type f -not -path 'src/bin/*' 2>/dev/null | head -1)
@@ -17,7 +20,12 @@ for f in loom loom-x; do
 done
 /usr/bin/cp -f scripts/loom-session "$B/loom-session" && chmod +x "$B/loom-session"
 echo "installed loom, loom-x, loom-session in $B"
-if ! cmp -s dist/loom.desktop /usr/share/wayland-sessions/loom.desktop; then
+# the session entry with this home in it (dist/loom.desktop has @HOME@): it named one machine's
+# /home/caesar, and on any other the login screen started nothing
+S=${XDG_DATA_HOME:-$HOME/.local/share}/loom/loom.desktop
+mkdir -p "$(dirname "$S")"
+sed "s|@HOME@|$HOME|g" dist/loom.desktop > "$S"
+if ! cmp -s "$S" /usr/share/wayland-sessions/loom.desktop; then
   echo "for the login screen's session list (once, needs root):"
-  echo "  sudo install -m 644 $(pwd)/dist/loom.desktop /usr/share/wayland-sessions/loom.desktop"
+  echo "  sudo install -m 644 $S /usr/share/wayland-sessions/loom.desktop"
 fi
