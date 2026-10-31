@@ -106,6 +106,12 @@ where
                         let attributes = states.data_map.get::<Mutex<LockSurfaceAttributes>>();
                         let attributes = attributes.unwrap().lock().unwrap();
 
+                        // loom: a destroyed lock surface is a plain surface again: the locker detaches
+                        // it (a NULL buffer) after unlocking, as Quickshell does, and must not be killed for it
+                        if !attributes.surface.is_alive() {
+                            return;
+                        }
+
                         let Some(state) = attributes.last_acked else {
                             attributes.surface.post_error(
                                 ext_session_lock_surface_v1::Error::CommitBeforeFirstAck,
