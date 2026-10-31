@@ -27,6 +27,9 @@ pub struct Managed {
     /// a 0x0 window) gives up its tile after DRAW_WAIT, and gets it back when it draws
     pub since: std::time::Instant,
     pub drawn: bool,
+    /// what the program was told by `fullscreenstate` when it differs from what loom does (Hyprland's
+    /// client state: 0 none, 1 maximized, 2 fullscreen, 3 both); -1: as the layout
+    pub client_fs: i8,
 }
 
 /// How long a new window keeps a tile before its first picture: laid out at once, so it draws at
@@ -37,6 +40,11 @@ pub const DRAW_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// Hyprland's id for the special workspace ("special:special").
 pub const SPECIAL: i32 = -98;
+
+/// A special workspace's id (special:special and the named ones, below it).
+pub fn is_special(ws: i32) -> bool {
+    ws <= SPECIAL
+}
 
 impl Loom {
     /// A new window: on the active workspace, tiled, focused.
@@ -67,7 +75,7 @@ impl Loom {
         if ws != self.active_ws && !ruled.is_some_and(|r| r.1) {
             self.switch_workspace(ws);
         }
-        let m = Managed { window: window.clone(), addr, ws, pid, floating: float_at.is_some(), pinned: false, last_at: Default::default(), since: std::time::Instant::now(), drawn: false };
+        let m = Managed { window: window.clone(), addr, ws, pid, floating: float_at.is_some(), pinned: false, last_at: Default::default(), since: std::time::Instant::now(), drawn: false, client_fs: -1 };
         // on a center workspace a new tiled window goes first: it becomes the master, floating in the middle
         if !m.floating && self.layouts.of(&ws.to_string()).suit == "center" { self.managed.insert(0, m) } else { self.managed.push(m) }
         // still nothing drawn by then: laid out again without it
@@ -137,7 +145,7 @@ impl Loom {
             self.tile(ws, area, false);
         }
         // mapping a tiled window puts it on top: the floating ones back over them, in their order
-        let floats: Vec<Window> = self.space.elements().filter(|w| self.managed_of(w).is_some_and(|m| m.floating && m.ws != SPECIAL)).cloned().collect();
+        let floats: Vec<Window> = self.space.elements().filter(|w| self.managed_of(w).is_some_and(|m| m.floating && !is_special(m.ws))).cloned().collect();
         for w in floats {
             self.space.raise_element(&w, false);
             // a floating one is not tiled (GTK draws its own shadow and corners then)
@@ -149,9 +157,9 @@ impl Loom {
             }
         }
         // the special workspace over the focused screen (Super+S), as Hyprland draws it
-        if let (true, Some(o)) = (self.special_shown, self.output.clone()) {
+        if let (true, Some(o)) = (self.special_shown != 0, self.output.clone()) {
             if let Some(area) = self.area_of(&o) {
-                self.tile(SPECIAL, area, true);
+                self.tile(self.special_shown, area, true);
             }
         }
         // a fullscreen window: the whole screen showing its workspace, above the rest
@@ -182,6 +190,8 @@ impl Loom {
     /// One workspace's tiled windows in `area`; `raise` puts them on top (the special one).
     fn tile(&mut self, ws: i32, area: Rectangle<i32, Logical>, raise: bool) {
         let tiled: Vec<(Window, u64)> = self.managed.iter().filter(|m| m.ws == ws && self.takes_tile(m)).map(|m| (m.window.clone(), m.addr)).collect();
+        // told fullscreen while tiled (fullscreenstate 0 2/3, the spoof): it stays told so
+        let spoofed: Vec<u64> = self.managed.iter().filter(|m| m.ws == ws && m.client_fs >= 0 && m.client_fs & 2 != 0).map(|m| m.addr).collect();
         let suit = self.layouts.of(&ws.to_string());
         let rects: Vec<Rectangle<i32, Logical>> = crate::layouts::arrange(tiled.len(), area, &suit)
             .into_iter()
@@ -204,9 +214,12 @@ impl Loom {
             let bh = self.bar_height(&win).round() as i32;
             let rect = Rectangle::new((rect.loc.x, rect.loc.y + bh).into(), (rect.size.w, (rect.size.h - bh).max(1)).into());
             if let Some(t) = win.toplevel() {
+                let spoof = spoofed.contains(&addr);
                 t.with_pending_state(|s| {
                     s.size = Some(rect.size);
-                    s.states.unset(smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State::Fullscreen);
+                    if !spoof {
+                        s.states.unset(smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State::Fullscreen);
+                    }
                     set_tiled(s, true);
                 });
                 if t.is_initial_configure_sent() {
@@ -251,11 +264,11 @@ impl Loom {
     pub fn switch_workspace(&mut self, n: i32) {
         // the special workspace opens over this one (as togglespecialworkspace); it became the
         // screen's workspace and hid the one under it
-        if n == SPECIAL {
-            if !self.special_shown {
-                self.toggle_special();
+        if is_special(n) {
+            if self.special_shown != n {
+                self.toggle_special(n);
             }
-            self.focus_next(SPECIAL);
+            self.focus_next(n);
             return;
         }
         if n == self.active_ws {
@@ -279,6 +292,7 @@ impl Loom {
             self.hide_window(w);
         }
         let old = self.active_ws;
+        self.prev_ws = old;
         self.active_ws = n;
         if let Some(name) = self.output.as_ref().map(|o| o.name()) {
             self.shown_on.insert(name.clone(), n);
@@ -569,6 +583,49 @@ impl Loom {
     }
 
     /// fullscreen: the focused window over the whole output, or back into the tiling.
+    /// Hyprland's fullscreen mode of `w` in the layout: 0 none, 1 maximized, 2 fullscreen.
+    pub fn fs_mode(&self, w: &Window) -> i8 {
+        if self.is_full(w) { 2 } else if self.maximized.as_ref() == Some(w) { 1 } else { 0 }
+    }
+
+    /// `fullscreenstate INTERNAL CLIENT`: what loom does with the window (0 none, 1 maximized, 2
+    /// fullscreen, -1 as it is) and what the program is told (0…3), apart: `0 3` is the "spoof"
+    /// (a video fills its window, the layout keeps it). The same state again turns both off.
+    pub fn set_fullscreen_state(&mut self, w: &Window, internal: i8, client: i8) {
+        let Some(m) = self.managed_of(w) else { return };
+        let now = self.fs_mode(w);
+        let told = if m.client_fs >= 0 { m.client_fs } else { now };
+        let internal = if internal < 0 { now } else { internal.min(2) };
+        let client = if client < 0 { internal } else { client.min(3) };
+        let (internal, client) = if internal == now && client == told { (0, 0) } else { (internal, client) };
+        if internal != 2 && self.is_full(w) {
+            self.set_fullscreen(w, false);
+        }
+        if (internal == 1) != (self.maximized.as_ref() == Some(w)) {
+            self.toggle_maximize(w);
+        }
+        if internal == 2 {
+            self.set_fullscreen(w, true);
+        }
+        if let Some(m) = self.managed.iter_mut().find(|m| &m.window == w) {
+            m.client_fs = if client == internal { -1 } else { client };
+        }
+        // what the program hears
+        use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State;
+        if let Some(t) = w.toplevel() {
+            t.with_pending_state(|s| {
+                if client & 2 != 0 { s.states.set(State::Fullscreen); } else { s.states.unset(State::Fullscreen); }
+                if client & 1 != 0 { s.states.set(State::Maximized); } else { s.states.unset(State::Maximized); }
+            });
+            if t.is_initial_configure_sent() {
+                t.send_pending_configure();
+            }
+        } else if let Some(x) = w.x11_surface() {
+            let _ = x.set_fullscreen(client & 2 != 0);
+        }
+        self.foreign_all_changed();
+    }
+
     pub fn toggle_fullscreen(&mut self) {
         let Some(w) = self.focused.clone() else { return };
         let on = !self.is_full(&w);
@@ -655,6 +712,20 @@ impl Loom {
         self.relayout();
     }
 
+    /// swapnext: the focused tiled window and the next one (previous with `back`) change places.
+    pub fn swap_next(&mut self, back: bool) {
+        let Some(cur) = self.focused.clone() else { return };
+        let Some(ws) = self.managed_of(&cur).filter(|m| !m.floating).map(|m| m.ws) else { return };
+        let tiled: Vec<usize> = (0..self.managed.len()).filter(|&i| self.managed[i].ws == ws && self.takes_tile(&self.managed[i])).collect();
+        let Some(k) = tiled.iter().position(|&i| self.managed[i].window == cur) else { return };
+        if tiled.len() < 2 {
+            return;
+        }
+        let other = tiled[(k as i32 + if back { -1 } else { 1 }).rem_euclid(tiled.len() as i32) as usize];
+        self.managed.swap(tiled[k], other);
+        self.relayout();
+    }
+
     /// pin: a floating window on every workspace, or not.
     pub fn toggle_pin(&mut self) {
         let Some(cur) = self.focused.clone() else { return };
@@ -666,11 +737,19 @@ impl Loom {
     /// resizeactive exact W H | DX DY: a floating window's size.
     pub fn resize_active(&mut self, arg: &str) {
         let Some(cur) = self.focused.clone() else { return };
-        if !self.managed_of(&cur).is_some_and(|m| m.floating) {
-            return;
-        }
+        let Some(m) = self.managed_of(&cur) else { return };
         let parts: Vec<&str> = arg.split_whitespace().collect();
         let size = cur.geometry().size;
+        if !m.floating {
+            // a tiled window: the layout's master share moves by the pixels asked (as a drag on it does)
+            let (dw, dh) = match parts.as_slice() {
+                ["exact", w, h] => (w.parse::<i32>().map(|w| w - size.w).unwrap_or(0), h.parse::<i32>().map(|h| h - size.h).unwrap_or(0)),
+                [dw, dh] => (dw.parse().unwrap_or(0), dh.parse().unwrap_or(0)),
+                _ => return,
+            };
+            self.resize_tiled(&cur, dw, dh);
+            return;
+        }
         let (w, h) = match parts.as_slice() {
             ["exact", w, h] => (w.parse().unwrap_or(size.w), h.parse().unwrap_or(size.h)),
             [dw, dh] => (size.w + dw.parse::<i32>().unwrap_or(0), size.h + dh.parse::<i32>().unwrap_or(0)),
@@ -686,24 +765,85 @@ impl Loom {
         }
     }
 
-    /// togglespecialworkspace: the special workspace shown over the active one, or hidden.
-    pub fn toggle_special(&mut self) {
-        self.special_shown = !self.special_shown;
-        let here: Vec<Window> = self.managed.iter().filter(|m| m.ws == SPECIAL).map(|m| m.window.clone()).collect();
-        for w in &here {
-            if self.special_shown {
-                self.show_window(w, true);
-            } else {
+    /// A tiled window `dw` × `dh` px bigger (smaller when negative): its workspace's master share
+    /// moves, wider for a master, narrower for one beside it; across for tile / tileleft / spiral /
+    /// dwindle / corners, up and down for tilebottom / tiletop. fair, max, center: nothing to move.
+    pub fn resize_tiled(&mut self, w: &Window, dw: i32, dh: i32) {
+        let Some(ws) = self.managed_of(w).map(|m| m.ws) else { return };
+        let suit = self.layouts.of(&ws.to_string());
+        if matches!(suit.suit.as_str(), "fair" | "fairh" | "max" | "center") {
+            return;
+        }
+        let tiled: Vec<Window> = self.managed.iter().filter(|m| m.ws == ws && self.takes_tile(m)).map(|m| m.window.clone()).collect();
+        let Some(i) = tiled.iter().position(|t| t == w) else { return };
+        if tiled.len() < 2 {
+            return;
+        }
+        let Some(area) = self.tile_area() else { return };
+        let across = !matches!(suit.suit.as_str(), "tilebottom" | "tiletop");
+        let (d, len) = if across { (dw, area.size.w) } else { (dh, area.size.h) };
+        let masters = if suit.suit.starts_with("tile") { suit.nmaster.max(1) } else { 1 };
+        let step = d as f64 / len.max(1) as f64 * if i < masters { 1.0 } else { -1.0 };
+        if step.abs() < 0.001 {
+            return;
+        }
+        let _ = self.layouts.message(&ws.to_string(), &format!("mwfact {step:+.3}"));
+        self.relayout();
+    }
+
+    /// The id of special workspace `name` ("" or "special": special:special), made when new.
+    pub fn special_id(&mut self, name: &str) -> i32 {
+        let name = name.trim().trim_start_matches("special:").trim_start_matches("special");
+        let name = name.trim_start_matches(':');
+        if name.is_empty() || name == "special" {
+            return SPECIAL;
+        }
+        let i = match self.special_names.iter().position(|n| n == name) {
+            Some(i) => i,
+            None => {
+                self.special_names.push(name.to_string());
+                self.special_names.len() - 1
+            }
+        };
+        SPECIAL - 1 - i as i32
+    }
+    /// Hyprland's name of workspace `ws`: "special:NAME" for a special one, else its number.
+    pub fn ws_name(&self, ws: i32) -> String {
+        if ws == SPECIAL {
+            return "special:special".into();
+        }
+        if is_special(ws) {
+            if let Some(n) = self.special_names.get((SPECIAL - 1 - ws) as usize) {
+                return format!("special:{n}");
+            }
+        }
+        ws.to_string()
+    }
+
+    /// togglespecialworkspace [NAME]: that special workspace shown over the active one, or hidden
+    /// (another one shown goes away first, as on Hyprland: one special workspace at a time).
+    pub fn toggle_special(&mut self, id: i32) {
+        let before = self.special_shown;
+        if before != 0 {
+            let gone: Vec<Window> = self.managed.iter().filter(|m| m.ws == before).map(|m| m.window.clone()).collect();
+            for w in &gone {
                 self.hide_window(w);
             }
         }
+        self.special_shown = if before == id { 0 } else { id };
+        let here: Vec<Window> = self.managed.iter().filter(|m| m.ws == self.special_shown && self.special_shown != 0).map(|m| m.window.clone()).collect();
+        for w in &here {
+            self.show_window(w, true);
+        }
         self.relayout();
         let mon = self.output.as_ref().map(|o| o.name()).unwrap_or_default();
-        if self.special_shown {
+        if self.special_shown != 0 {
             if let Some(w) = here.last() {
                 self.focus_window(w);
             }
-            self.hypr_event(&format!("activespecial>>special:special,{mon}"));
+            let name = self.ws_name(self.special_shown);
+            self.hypr_event(&format!("activespecial>>{name},{mon}"));
+            self.hypr_event(&format!("activespecialv2>>{},{name},{mon}", self.special_shown));
         } else {
             self.focus_next(self.active_ws);
             self.hypr_event(&format!("activespecial>>,{mon}"));
@@ -865,7 +1005,7 @@ impl Loom {
     /// covers it: with Bitwig's main window "above" its floating plugin window in X, the plugin's
     /// GPU-drawn content came out black wherever the two overlapped.
     pub fn x_sync_stacking(&mut self) {
-        let floats: Vec<Window> = self.space.elements().filter(|w| self.managed_of(w).is_some_and(|m| m.floating && m.ws != SPECIAL)).cloned().collect();
+        let floats: Vec<Window> = self.space.elements().filter(|w| self.managed_of(w).is_some_and(|m| m.floating && !is_special(m.ws))).cloned().collect();
         for w in &floats {
             self.space.raise_element(w, false);
         }

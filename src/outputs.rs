@@ -118,8 +118,8 @@ impl Loom {
     /// Workspace `ws` is on some screen now.
     pub fn is_shown(&self, ws: i32) -> bool {
         // the special workspace is shown over another, not by a screen of its own
-        if ws == crate::wm::SPECIAL {
-            return self.special_shown;
+        if crate::wm::is_special(ws) {
+            return self.special_shown == ws;
         }
         self.shown_on.values().any(|v| *v == ws)
     }

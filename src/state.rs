@@ -82,6 +82,8 @@ pub struct Loom {
     pub managed: Vec<crate::wm::Managed>,
     pub next_addr: u64,
     pub active_ws: i32,
+    /// the workspace shown before the active one (`workspace previous`)
+    pub prev_ws: i32,
     pub focused: Option<Window>,
     /// focused before it had anything to show: the keyboard goes to it when it maps (an enter
     /// sent to an unmapped surface is ignored by Firefox and GTK, and was never sent again)
@@ -140,7 +142,11 @@ pub struct Loom {
     /// a config reload is on its way (config.rs: saves close together become one)
     pub reload_pending: bool,
     /// the special workspace (Super+S) shown over the active one
-    pub special_shown: bool,
+    /// the special workspace shown over the focused screen (its id, ≤ SPECIAL), 0 when none
+    pub special_shown: i32,
+    /// named special workspaces (special:minimized …), in the order first used: the n-th has id
+    /// SPECIAL - 1 - n (special:special itself is SPECIAL)
+    pub special_names: Vec<String>,
     /// a window dragged by a mouse bind; the last scroll bind's time; `exec [workspace N] …` rules by pid
     pub drag: Option<crate::pointer::Drag>,
     pub last_scroll_bind: u32,
@@ -293,6 +299,7 @@ impl Loom {
             managed: Vec::new(),
             next_addr: 0,
             active_ws: 1,
+            prev_ws: 1,
             focused: None,
             focus_on_map: None,
             test_input: Default::default(),
@@ -323,7 +330,8 @@ impl Loom {
             repeat_gen: 0,
             loop_handle: None,
             reload_pending: false,
-            special_shown: false,
+            special_shown: 0,
+            special_names: Vec::new(),
             drag: None,
             last_scroll_bind: 0,
             exec_rules: Vec::new(),

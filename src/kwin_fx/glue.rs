@@ -50,7 +50,7 @@ impl Loom {
             "windowClass": format!("{} {}", class.to_lowercase(), class),
             "caption": self.title_of(w),
             "normalWindow": !dialog, "dialog": dialog, "popupWindow": false, "managed": true,
-            "visible": self.space.elements().any(|e| e == w), "minimized": m.ws == crate::wm::SPECIAL,
+            "visible": self.space.elements().any(|e| e == w), "minimized": crate::wm::is_special(m.ws),
             "hasDecoration": !matches!(self.decor_kind(w), crate::decor::Kind::None),
             "geometry": geo, "frameGeometry": geo, "expandedGeometry": geo,
             "fullScreen": self.is_full(w), "maximized": self.maximized.as_ref() == Some(w),
