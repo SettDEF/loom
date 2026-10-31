@@ -35,7 +35,9 @@ pub fn run(socket: Option<String>, run: Vec<String>) -> Result<(), Box<dyn std::
     let mut state = Loom::new(display.handle(), event_loop.get_signal());
 
     // the window on the desktop it runs in: named loom (Hyprland's rules and title bars see that)
-    let attrs = smithay::reexports::winit::window::WindowAttributes::default().with_title("loom").with_inner_size(smithay::reexports::winit::dpi::LogicalSize::new(1280.0, 800.0));
+    // (the title alone left the class empty: rules matching class loom never applied)
+    use smithay::reexports::winit::platform::wayland::WindowAttributesExtWayland;
+    let attrs = smithay::reexports::winit::window::WindowAttributes::default().with_title("loom").with_name("loom", "loom").with_inner_size(smithay::reexports::winit::dpi::LogicalSize::new(1280.0, 800.0));
     let (mut backend, winit_loop) = winit::init_from_attributes::<GlesRenderer>(attrs)?;
     // GPU buffers from programs, offered with feedback (gpu.rs)
     crate::gpu::offer(&mut state, backend.renderer());
