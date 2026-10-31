@@ -39,7 +39,10 @@ pub struct Settings {
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { enabled: true, size: 8.0, passes: 1, noise: 0.0117, contrast: 0.8916, brightness: 0.8172, vibrancy: 0.1696, xray: false }
+        // xray on, as the module comment says: the wallpaper blurred once and shared, so a blurred
+        // panel costs next to nothing after its first frame (it was off: everything behind each
+        // blurred surface blurred again whenever it changed, the costly way on an old GPU)
+        Settings { enabled: true, size: 8.0, passes: 1, noise: 0.0117, contrast: 0.8916, brightness: 0.8172, vibrancy: 0.1696, xray: true }
     }
 }
 
