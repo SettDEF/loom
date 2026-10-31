@@ -130,6 +130,15 @@ where
             EGLContext::new_with_config(&display, gl_attributes, PixelFormatRequirements::_10_bit())
                 .or_else(|_| {
                     EGLContext::new_with_config(&display, gl_attributes, PixelFormatRequirements::_8_bit())
+                })
+                // loom: a driver with no format that has alpha (Intel Haswell and older, Mesa
+                // crocus) failed both; the window is drawn whole, so it needs none
+                .or_else(|_| {
+                    EGLContext::new_with_config(
+                        &display,
+                        gl_attributes,
+                        PixelFormatRequirements { alpha_bits: None, ..PixelFormatRequirements::_8_bit() },
+                    )
                 })?;
 
         let (surface, is_x11) = match window.window_handle().map(|handle| handle.as_raw()) {
