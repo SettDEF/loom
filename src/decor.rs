@@ -607,7 +607,7 @@ impl crate::state::Loom {
                         }
                     }
                     "minimize" => {
-                        let to = { let m = self.decor.borrow().conf.minimize_to.clone(); if m == "special" { crate::wm::SPECIAL } else { m.parse().unwrap_or(crate::wm::SPECIAL) } };
+                        let to = { let m = self.decor.borrow().conf.minimize_to.clone(); match m.parse::<i32>() { Ok(n) => n, Err(_) => self.special_id(&m) } };
                         self.focus_window(&w);
                         self.move_to_workspace(to);
                     }
@@ -649,6 +649,9 @@ impl crate::state::Loom {
         }
         self.relayout();
         let on = self.maximized.as_ref() == Some(w);
+        if !self.is_full(w) {
+            self.hypr_event(&format!("fullscreen>>{}", u8::from(on)));
+        }
         self.fx_event("windowMaximizedStateChanged", w, &[on.into(), on.into()]);
         self.foreign_all_changed();
     }

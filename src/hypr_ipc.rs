@@ -194,6 +194,45 @@ impl Loom {
         }
     }
 
+    /// A workspace as Hyprland's dispatchers name it: `3`; `+1` / `-1` (by number); `r+1` (by
+    /// number, from this screen's); `e+1` (the next workspace that exists, round); `m+1` (the
+    /// same on this screen); `previous`; `empty` (the first one with no window); `special` /
+    /// `special:NAME`.
+    pub fn ws_arg(&mut self, a: &str) -> Option<i32> {
+        let a = a.trim();
+        if a == "special" || a.starts_with("special:") {
+            return Some(self.special_id(a));
+        }
+        match a {
+            "previous" | "previous_per_monitor" => return Some(self.prev_ws),
+            "empty" => return (1..).find(|n| !self.managed.iter().any(|m| m.ws == *n)),
+            _ => {}
+        }
+        if let Some(n) = a.strip_prefix("name:") {
+            return n.parse().ok();
+        }
+        // round through the workspaces that exist (on this screen, for m)
+        let existing = |s: &Loom, mon: bool| -> Vec<i32> {
+            let here = s.output.as_ref().map(|o| o.name());
+            s.workspace_ids().into_iter().filter(|n| *n >= 1).filter(|n| !mon || s.ws_on.get(n).is_none_or(|o| Some(o) == here.as_ref())).collect()
+        };
+        for (p, mon) in [("e", false), ("m", true)] {
+            if let Some(r) = a.strip_prefix(p).filter(|r| r.starts_with('+') || r.starts_with('-')) {
+                let step: i32 = r.parse().ok()?;
+                let l = existing(self, mon);
+                let at = l.iter().position(|n| *n == self.active_ws)? as i32;
+                return Some(l[(at + step).rem_euclid(l.len() as i32) as usize]);
+            }
+        }
+        if let Some(r) = a.strip_prefix("r").filter(|r| r.starts_with('+') || r.starts_with('-')) {
+            return r.parse::<i32>().ok().map(|n| (self.active_ws + n).max(1));
+        }
+        if a.starts_with('+') || a.starts_with('-') {
+            return a.parse::<i32>().ok().map(|n| (self.active_ws + n).max(1));
+        }
+        a.parse().ok().filter(|n: &i32| *n >= 1)
+    }
+
     /// `dispatch NAME ARG`: the dispatchers the shell and scripts use.
     pub fn hypr_dispatch(&mut self, arg: &str) -> String {
         // Hyprland 0.56's Lua form (the shell's HyprDispatch.qml): read, carried out as classic dispatches
@@ -208,21 +247,8 @@ impl Loom {
             return "ok".into();
         }
         let (d, a) = arg.split_once(' ').map(|(x, y)| (x, y.trim())).unwrap_or((arg, ""));
-        let ws_of = |s: &Loom, a: &str| -> Option<i32> {
-            let a = a.trim();
-            if a == "special" || a.starts_with("special:") {
-                return Some(crate::wm::SPECIAL);
-            }
-            if let Some(r) = a.strip_prefix("e").or_else(|| a.strip_prefix("r")).filter(|r| r.starts_with('+') || r.starts_with('-')) {
-                return r.parse::<i32>().ok().map(|n| (s.active_ws + n).max(1));
-            }
-            if a.starts_with('+') || a.starts_with('-') {
-                return a.parse::<i32>().ok().map(|n| (s.active_ws + n).max(1));
-            }
-            a.parse().ok()
-        };
         match d {
-            "workspace" => match ws_of(self, a) {
+            "workspace" => match self.ws_arg(a) {
                 Some(n) => self.switch_workspace(n),
                 None => return format!("invalid workspace {a}"),
             },
@@ -255,7 +281,7 @@ impl Loom {
                     _ => return format!("loomtest: {a}?"),
                 }
             }
-            "movetoworkspace" | "movetoworkspacesilent" => match ws_of(self, a.split(',').next().unwrap_or(a).trim()) {
+            "movetoworkspace" | "movetoworkspacesilent" => match self.ws_arg(a.split(',').next().unwrap_or(a).trim()) {
                 Some(n) => {
                     let named = a.split_once(',').map(|(_, s)| s.trim()).filter(|s| !s.is_empty());
                     let w = match named {
@@ -329,19 +355,82 @@ impl Loom {
                 }
                 None => return format!("No such window found: {a}"),
             },
-            "movewindowpixel" => {
-                // `exact X Y`: a floating window to that place
-                let p: Vec<i32> = a.split_whitespace().filter_map(|v| v.parse().ok()).collect();
-                if let (Some(w), [x, y]) = (self.focused.clone(), p.as_slice()) {
+            // movewindowpixel [exact] X Y[, WINDOW] / moveactive [exact] X Y: a floating window moved by
+            // X Y, or to X Y (exact); a window named after the comma is the one moved
+            "movewindowpixel" | "moveactive" => {
+                let (pos, sel) = a.split_once(',').map(|(p, s)| (p.trim(), s.trim())).unwrap_or((a, ""));
+                let w = match sel {
+                    "" | "activewindow" => self.focused.clone(),
+                    sel => match self.find_window(sel) {
+                        Some(m) => Some(m.window),
+                        None => return format!("No such window found: {sel}"),
+                    },
+                };
+                let exact = pos.split_whitespace().next() == Some("exact");
+                let p: Vec<i32> = pos.split_whitespace().filter_map(|v| v.parse().ok()).collect();
+                if let (Some(w), [x, y]) = (w, p.as_slice()) {
                     if self.managed_of(&w).is_some_and(|m| m.floating) {
-                        self.space.map_element(w.clone(), (*x, *y), true);
+                        let at = self.space.element_location(&w).unwrap_or_default();
+                        let to: smithay::utils::Point<i32, smithay::utils::Logical> = if exact { (*x, *y).into() } else { (at.x + x, at.y + y).into() };
+                        self.space.map_element(w.clone(), to, true);
                         if let Some(xs) = w.x11_surface() {
-                            let _ = xs.configure(self.x_moved(xs, (*x, *y).into()));
+                            let _ = xs.configure(self.x_moved(xs, to));
                         }
                         self.dirty = true;
                     }
                 }
             }
+            // centerwindow: a floating window in the middle of what its screen's panels leave free
+            "centerwindow" => {
+                if let (Some(w), Some(area)) = (self.focused.clone(), self.tile_area()) {
+                    if self.managed_of(&w).is_some_and(|m| m.floating) {
+                        let size = w.geometry().size;
+                        let to: smithay::utils::Point<i32, smithay::utils::Logical> = (area.loc.x + (area.size.w - size.w) / 2, area.loc.y + (area.size.h - size.h) / 2).into();
+                        self.space.map_element(w.clone(), to, true);
+                        if let Some(xs) = w.x11_surface() {
+                            let _ = xs.configure(self.x_moved(xs, to));
+                        }
+                        self.dirty = true;
+                    }
+                }
+            }
+            // swapwindow DIR: the tiled window there and this one change places (movewindow does that for tiles)
+            "swapwindow" => self.move_window(a),
+            // swapnext [prev]: with the next (or previous) tiled window on this workspace, round
+            "swapnext" => self.swap_next(a.trim() == "prev"),
+            // splitratio [exact] R: the layout's master share (Hyprland's dwindle ratio): +0.1, -0.1, exact 0.3
+            "splitratio" => {
+                let ws = self.active_ws.to_string();
+                let r = a.trim();
+                let msg = match r.strip_prefix("exact") {
+                    Some(v) => match v.trim().parse::<f64>() {
+                        Ok(x) => format!("mwfact {:+.3}", x - self.layouts.of(&ws).mwfact),
+                        Err(_) => return format!("splitratio {a}?"),
+                    },
+                    None => format!("mwfact {r}"),
+                };
+                if let Err(e) = self.layouts.message(&ws, &msg) {
+                    return e;
+                }
+                self.relayout();
+            }
+            // togglesplit: side by side becomes one over the other and back (tile ↔ tilebottom,
+            // tileleft ↔ tiletop); dwindle and spiral split as they go
+            "togglesplit" => {
+                let ws = self.active_ws.to_string();
+                let to = match self.layouts.of(&ws).suit.as_str() {
+                    "tile" => "tilebottom",
+                    "tilebottom" => "tile",
+                    "tileleft" => "tiletop",
+                    "tiletop" => "tileleft",
+                    "fair" => "fairh",
+                    "fairh" => "fair",
+                    s => return format!("togglesplit: the {s} layout splits as it goes (layoutmsg suit tile, then togglesplit)"),
+                };
+                let _ = self.layouts.message(&ws, &format!("suit {to}"));
+                self.relayout();
+            }
+            "pseudo" => return "pseudo: loom has no pseudotiling (a floating window keeps its size: togglefloating)".into(),
             "movecursor" => {
                 let p: Vec<f64> = a.split_whitespace().filter_map(|v| v.parse().ok()).collect();
                 if let [x, y] = p.as_slice() {
@@ -388,7 +477,14 @@ impl Loom {
             // "fullscreen 1" (Hyprland's maximize, the overview menu's and Super+D) and fullscreenstate maximize in the
             // layout; "fullscreen" / "fullscreen 0" cover the screen
             "fullscreen" if a.trim() == "1" => { if let Some(w) = self.focused.clone() { self.toggle_maximize(&w); self.relayout() } }
-            "fullscreenstate" => { if let Some(w) = self.focused.clone() { self.toggle_maximize(&w); self.relayout() } }
+            // fullscreenstate INTERNAL [CLIENT]: the layout's mode and what the program is told, apart
+            "fullscreenstate" => {
+                let mut n = a.split_whitespace().map(|v| v.parse::<i8>().unwrap_or(-1));
+                let (internal, client) = (n.next().unwrap_or(-1), n.next().unwrap_or(-1));
+                if let Some(w) = self.focused.clone() {
+                    self.set_fullscreen_state(&w, internal, client);
+                }
+            }
             "fullscreen" => self.toggle_fullscreen(),
             "movewindow" => self.move_window(a),
             "pin" => self.toggle_pin(),
@@ -417,7 +513,10 @@ impl Loom {
                 }
                 self.relayout();
             }
-            "togglespecialworkspace" => self.toggle_special(),
+            "togglespecialworkspace" => {
+                let id = self.special_id(a);
+                self.toggle_special(id);
+            }
             "sendshortcut" => self.send_shortcut(a),
             "exit" => self.signal.stop(),
             "loomdebug" => match a.trim() {
@@ -504,7 +603,7 @@ impl Loom {
             },
             "moveworkspacetomonitor" => {
                 let (w, m) = a.split_once(' ').unwrap_or((a, ""));
-                match (ws_of(self, w), self.monitor_arg(m)) {
+                match (self.ws_arg(w), self.monitor_arg(m)) {
                     (Some(n), Some(o)) => self.workspace_to_monitor(n, &o),
                     _ => return format!("moveworkspacetomonitor {a}: which workspace / monitor?"),
                 }
@@ -598,7 +697,7 @@ impl Loom {
                 "refreshRate": hz,
                 "x": at.x, "y": at.y,
                 "activeWorkspace": { "id": ws, "name": ws.to_string() },
-                "specialWorkspace": { "id": 0, "name": "" },
+                "specialWorkspace": if self.special_shown != 0 && self.output.as_ref() == Some(o) { json!({ "id": self.special_shown, "name": self.ws_name(self.special_shown) }) } else { json!({ "id": 0, "name": "" }) },
                 "reserved": zone, "scale": o.current_scale().fractional_scale(), "transform": 0,
                 "focused": self.output.as_ref() == Some(o), "dpmsStatus": !self.screen_off, "vrr": self.vrr_on(&o.name()), "solitary": "0", "solitaryBlockedBy": [],
                 "activelyTearing": false, "tearingBlockedBy": [], "directScanoutTo": "0", "directScanoutBlockedBy": [],
@@ -629,10 +728,10 @@ impl Loom {
         let here: Vec<&crate::wm::Managed> = self.managed.iter().filter(|m| m.ws == id).collect();
         let last = here.last();
         json!({
-            "id": id, "name": if id == crate::wm::SPECIAL { "special:special".to_string() } else { id.to_string() },
+            "id": id, "name": self.ws_name(id),
             "monitor": self.ws_on.get(&id).cloned().or_else(|| self.output.as_ref().map(|o| o.name())).unwrap_or_default(),
             "monitorID": self.ws_on.get(&id).map(|n| self.output_id(n)).unwrap_or(0),
-            "windows": here.len(), "hasfullscreen": false,
+            "windows": here.len(), "hasfullscreen": here.iter().any(|m| self.is_full(&m.window) || self.maximized.as_ref() == Some(&m.window)),
             "lastwindow": last.map(|m| format!("0x{:x}", m.addr)).unwrap_or_else(|| "0x0".into()),
             "lastwindowtitle": last.map(|m| self.title_of(&m.window)).unwrap_or_default(),
             "ispersistent": false,
@@ -645,15 +744,19 @@ impl Loom {
         let size = m.window.geometry().size;
         let class = self.class_of(&m.window);
         let title = self.title_of(&m.window);
+        // Hyprland's fullscreen modes: 0 none, 1 maximized, 2 fullscreen
+        let fs = self.fs_mode(&m.window);
+        let fs_client = if m.client_fs >= 0 { m.client_fs } else { fs };
         json!({
             "address": format!("0x{:x}", m.addr), "mapped": true, "hidden": !self.is_shown(m.ws),
             "at": [loc.x, loc.y], "size": [size.w, size.h],
-            "workspace": { "id": m.ws, "name": if m.ws == crate::wm::SPECIAL { "special:special".to_string() } else { m.ws.to_string() } },
+            "workspace": { "id": m.ws, "name": self.ws_name(m.ws) },
             "floating": m.floating, "pseudo": false, "monitor": self.ws_on.get(&m.ws).map(|n| self.output_id(n)).unwrap_or(0),
             "class": class, "title": title, "initialClass": class, "initialTitle": title,
-            "pid": m.pid, "xwayland": m.window.x11_surface().is_some(), "pinned": false, "fullscreen": if self.is_full(&m.window) { 2 } else { 0 }, "fullscreenClient": if self.is_full(&m.window) { 2 } else { 0 },
+            "pid": m.pid, "xwayland": m.window.x11_surface().is_some(), "pinned": m.pinned, "fullscreen": fs, "fullscreenClient": fs_client,
             "grouped": [], "tags": [], "swallowing": "0x0",
-            "focusHistoryID": if self.focused.as_ref() == Some(&m.window) { 0 } else { 1 },
+            // 0 the focused one, then back through the focus history (scripts find "the last one" by it)
+            "focusHistoryID": self.focus_history.iter().rev().position(|w| w == &m.window).unwrap_or(self.focus_history.len()),
             "inhibitingIdle": false, "xdgTag": "", "xdgDescription": "", "contentType": "none",
         })
     }
