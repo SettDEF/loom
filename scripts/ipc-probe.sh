@@ -6,6 +6,7 @@
 #   replies are printed; LOG=1 prints loom's own lines at the end. Never touches the live session.
 set -eu
 B=${CARGO_TARGET_DIR:-/mnt/storage/dev/cargo-target/loom}/release/loom
+[ -x "$B" ] || B=$HOME/.local/bin/loom   # another machine: the installed one
 W=3
 while [ $# -gt 0 ]; do
   case $1 in

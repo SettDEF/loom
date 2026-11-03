@@ -10,7 +10,9 @@
 # Usage: scripts/try-tty.sh [minutes=10] [loom-binary]
 set -eu
 MIN=${1:-10}
+# the build on one machine's data disk, else the installed one (scripts/install.sh)
 L=${2:-/mnt/storage/dev-cache/targets/release/loom}
+[ -x "$L" ] || L=$HOME/.local/bin/loom
 HERE=$(dirname "$(readlink -f "$0")")
 LOG_DIR=${XDG_STATE_HOME:-$HOME/.local/state}/loom
 mkdir -p "$LOG_DIR"

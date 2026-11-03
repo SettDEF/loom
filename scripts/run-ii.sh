@@ -13,6 +13,7 @@ set -eu
 SECS=${1:-25}
 OUT=${2:-$PWD/ii-on-loom.png}
 L=${3:-/mnt/storage/dev/cargo-target/loom/release/loom}
+[ -x "$L" ] || L=$HOME/.local/bin/loom   # another machine: the installed one
 # the CPU renderer by default (no GPU in the sandbox); LOOM_GPU=1 draws with the GPU
 # LOOM_BLUR_DUMP=dir: the blur textures written there (debugging)
 # LOOM_BIND=dir: a folder of the real disk writable inside (frames from --record, say)

@@ -9,6 +9,7 @@
 # Usage: scripts/try-nested.sh [loom-binary]
 set -eu
 L=${1:-/mnt/storage/dev-cache/targets/release/loom}
+[ -x "$L" ] || L=$HOME/.local/bin/loom   # another machine: the installed one
 U=/run/user/$(id -u)
 HOST="${XDG_RUNTIME_DIR:-$U}/${WAYLAND_DISPLAY:-wayland-1}"
 [ -S "$HOST" ] || { echo "no Wayland socket at $HOST" >&2; exit 1; }

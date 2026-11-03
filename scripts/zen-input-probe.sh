@@ -10,6 +10,7 @@
 # Never touches the live session: its own runtime folder, socket and Zen profile.
 set -eu
 B=${CARGO_TARGET_DIR:-/mnt/storage/dev-cache/targets}/release/loom
+[ -x "$B" ] || B=$HOME/.local/bin/loom   # another machine: the installed one
 Z=$(command -v tela-zen || command -v zen-browser || command -v firefox)
 while [ $# -gt 0 ]; do
   case $1 in
